@@ -1,0 +1,104 @@
+"""
+MCP Server authentication handler
+Created: 2025-01-30 14:37:00 PST
+"""
+
+import os
+import httpx
+from typing import Optional, Dict, Any
+import asyncio
+from datetime import datetime, timedelta
+
+
+class MCPAuthManager:
+    """Manages authentication for MCP server"""
+    
+    def __init__(self):
+        self.api_key = os.environ.get("TODO_API_KEY", "")
+        self.api_endpoint = os.environ.get("TODO_API_ENDPOINT", "http://localhost:8000/api/v1")
+        self.device_name = os.environ.get("TODO_DEVICE_NAME", "MCP Agent")
+        self._session_token: Optional[str] = None
+        self._token_expiry: Optional[datetime] = None
+    
+    async def ensure_authenticated(self) -> Dict[str, str]:
+        """
+        Ensure we have a valid authentication token
+        Returns headers to use for API requests
+        """
+        # If using API key, just return headers with API key
+        if self.api_key:
+            return {
+                "X-API-Key": self.api_key,
+                "X-Device-Name": self.device_name,
+                "X-Device-Type": "mcp_agent"
+            }
+        
+        # Otherwise, we need session-based auth (not implemented in this example)
+        raise ValueError("API key is required for MCP authentication")
+    
+    async def register_mcp_agent(self, user_email: str, user_password: str) -> Dict[str, Any]:
+        """
+        Register this MCP agent with the API and get an API key
+        This is a one-time setup process
+        """
+        async with httpx.AsyncClient(base_url=self.api_endpoint) as client:
+            # First, login as the user
+            login_response = await client.post(
+                "/auth/login",
+                data={
+                    "username": user_email,
+                    "password": user_password
+                },
+                headers={
+                    "X-Device-Name": self.device_name,
+                    "X-Device-Type": "mcp_agent"
+                }
+            )
+            login_response.raise_for_status()
+            
+            tokens = login_response.json()
+            access_token = tokens["access_token"]
+            
+            # Register MCP agent
+            register_response = await client.post(
+                "/auth/mcp/register",
+                json={
+                    "agent_name": self.device_name,
+                    "capabilities": [
+                        "task_management",
+                        "list_management",
+                        "search",
+                        "duplicate_detection"
+                    ],
+                    "permissions": [
+                        "tasks:read",
+                        "tasks:write",
+                        "lists:read",
+                        "lists:write",
+                        "workspaces:read"
+                    ]
+                },
+                headers={"Authorization": f"Bearer {access_token}"}
+            )
+            register_response.raise_for_status()
+            
+            agent_info = register_response.json()
+            
+            # Return the configuration to save
+            return {
+                "api_key": agent_info["api_key"],
+                "agent_id": agent_info["id"],
+                "agent_identifier": agent_info["agent_identifier"],
+                "user_id": tokens.get("user_id"),
+                "instructions": (
+                    "Save these environment variables:\\n"
+                    f"TODO_API_KEY={agent_info['api_key']}\\n"
+                    f"TODO_DEVICE_ID={agent_info['agent_identifier']}\\n"
+                    f"TODO_DEVICE_NAME={self.device_name}\\n"
+                    f"TODO_API_ENDPOINT={self.api_endpoint}"
+                )
+            }
+
+
+# Global instance
+auth_manager = MCPAuthManager()

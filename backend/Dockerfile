@@ -39,6 +39,10 @@ RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 # Copy application code
 COPY --chown=appuser:appuser . .
 
+# Make startup script executable (as root)
+USER root
+RUN chmod +x scripts/start.sh
+
 # Switch to non-root user
 USER appuser
 
@@ -46,4 +50,4 @@ USER appuser
 EXPOSE 8000
 
 # Run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["/bin/bash", "./scripts/start.sh"]

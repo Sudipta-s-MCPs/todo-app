@@ -7,7 +7,7 @@ from datetime import datetime
 from uuid import uuid4
 from sqlalchemy import (
     Column, String, DateTime, ForeignKey, 
-    Enum as SQLEnum, Text, JSON, Index
+    Enum, Text, JSON, Index
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -30,6 +30,8 @@ class ActionType(str, enum.Enum):
     # User actions
     PROFILE_UPDATE = "profile_update"
     SETTINGS_UPDATE = "settings_update"
+    USER_UPDATE = "user_update"
+    USER_DELETE = "user_delete"
     DEVICE_ADD = "device_add"
     DEVICE_REMOVE = "device_remove"
     DEVICE_TRUST = "device_trust"
@@ -98,16 +100,16 @@ class ActivityLog(Base):
     
     # User and action
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    action_type = Column(SQLEnum(ActionType), nullable=False)
+    action_type = Column(String(50), nullable=False)
     
     # Resource information
-    resource_type = Column(SQLEnum(ResourceType), nullable=True)
+    resource_type = Column(String(50), nullable=True)
     resource_id = Column(UUID(as_uuid=True), nullable=True)
     
     # Attribution
     device_id = Column(UUID(as_uuid=True), ForeignKey("user_devices.id"), nullable=True)
     session_id = Column(UUID(as_uuid=True), ForeignKey("user_sessions.id"), nullable=True)
-    access_method = Column(SQLEnum(AccessMethod), nullable=False)
+    access_method = Column(String(50), nullable=False)
     api_key_id = Column(UUID(as_uuid=True), ForeignKey("api_keys.id"), nullable=True)
     mcp_agent_id = Column(UUID(as_uuid=True), ForeignKey("mcp_agents.id"), nullable=True)
     

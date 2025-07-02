@@ -41,10 +41,11 @@ export const taskService = {
     return response.data;
   },
 
-  async createTask(data: TaskCreate & { list_id?: string }): Promise<Task> {
+  async createTask(data: TaskCreate & { list_id?: string; force_create?: boolean }): Promise<Task> {
     if (data.list_id) {
-      const { list_id, ...taskData } = data;
-      const response = await api.post<Task>(`/lists/${list_id}/tasks`, taskData);
+      const { list_id, force_create, ...taskData } = data;
+      const url = force_create ? `/lists/${list_id}/tasks?force_create=true` : `/lists/${list_id}/tasks`;
+      const response = await api.post<Task>(url, taskData);
       return response.data;
     }
     const response = await api.post<Task>('/tasks', data);

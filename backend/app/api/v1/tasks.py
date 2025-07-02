@@ -6,6 +6,7 @@ Created: 2025-01-30 14:29:00 PST
 from typing import List, Optional, Dict, Any
 from uuid import UUID
 from datetime import datetime
+import io
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query, UploadFile, File
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,9 +30,14 @@ from app.schemas.task import (
 from app.api.deps import get_current_user, get_access_info, get_access_info_direct, get_device_info
 from app.services.activity import log_activity
 from app.services.duplicate_detection import DuplicateDetector
+from app.services.duplicate_detection_ai import AIEnhancedDuplicateDetector, check_duplicate_with_ai
+from app.services.vector_service import get_vector_service
 from app.utils.security import calculate_similarity_hash
+from app.utils.logging import get_logger
 from app.websockets.notifications import notifications
+from app.services.storage_service import get_storage_service
 
+logger = get_logger(__name__)
 router = APIRouter()
 
 
@@ -147,24 +153,45 @@ async def create_task(
     
     # Check for duplicates if not forcing creation
     if not force_create:
-        has_duplicates, duplicate_tasks, scores = await DuplicateDetector.check_duplicate_on_create(
-            db, task_data.title, task_data.description, list_id
-        )
+        # Try AI-enhanced detection first
+        try:
+            has_duplicates, duplicate_tasks, scores, ai_analysis = await check_duplicate_with_ai(
+                db, task_data.title, task_data.description, list_id, current_user.id
+            )
+        except Exception as e:
+            # Fallback to traditional detection
+            has_duplicates, duplicate_tasks, scores = await DuplicateDetector.check_duplicate_on_create(
+                db, task_data.title, task_data.description, list_id
+            )
+            ai_analysis = None
         
         if has_duplicates:
-            # Return duplicate information
+            # Return duplicate information with AI suggestions
             duplicate_responses = []
             for dup_task in duplicate_tasks[:5]:  # Limit to 5 duplicates
                 dup_response = TaskResponse.model_validate(dup_task)
                 duplicate_responses.append(dup_response)
             
+            response_content = {
+                "detail": "Potential duplicate tasks found",
+                "duplicates": [resp.model_dump() for resp in duplicate_responses],
+                "similarity_scores": {str(k): v for k, v in scores.items()}
+            }
+            
+            # Add AI suggestions if available
+            if ai_analysis:
+                response_content["ai_analysis"] = {
+                    "suggested_action": ai_analysis.suggested_action,
+                    "reasoning": ai_analysis.reasoning,
+                    "confidence": ai_analysis.confidence
+                }
+                
+                if ai_analysis.suggested_title:
+                    response_content["ai_analysis"]["suggested_title"] = ai_analysis.suggested_title
+            
             return JSONResponse(
                 status_code=status.HTTP_409_CONFLICT,
-                content={
-                    "detail": "Potential duplicate tasks found",
-                    "duplicates": [resp.model_dump() for resp in duplicate_responses],
-                    "similarity_scores": {str(k): v for k, v in scores.items()}
-                }
+                content=response_content
             )
     
     # Get access info
@@ -218,6 +245,25 @@ async def create_task(
     
     await db.commit()
     await db.refresh(task)
+    
+    # Index in vector database
+    try:
+        vector_service = get_vector_service()
+        await vector_service.upsert_task(
+            task_id=task.id,
+            title=task.title,
+            description=task.description,
+            workspace_id=workspace.id,
+            list_id=list_id,
+            user_id=current_user.id,
+            status=task.status.value,
+            priority=task.priority.value,
+            tags=[],  # TODO: Add tags support when implemented
+            created_at=task.created_at
+        )
+    except Exception as e:
+        logger.warning(f"Failed to index task in vector DB: {str(e)}")
+        # Don't fail the request if vector indexing fails
     
     # Send WebSocket notification
     await notifications.notify_task_created(
@@ -439,6 +485,29 @@ async def update_task(
     await db.commit()
     await db.refresh(task)
     
+    # Update vector database if title or description changed
+    if task_data.title is not None or task_data.description is not None:
+        try:
+            # Get workspace ID for vector update
+            task_list = await db.get(TaskList, task.list_id)
+            if task_list:
+                vector_service = get_vector_service()
+                await vector_service.upsert_task(
+                    task_id=task.id,
+                    title=task.title,
+                    description=task.description,
+                    workspace_id=task_list.workspace_id,
+                    list_id=task.list_id,
+                    user_id=current_user.id,
+                    status=task.status.value,
+                    priority=task.priority.value,
+                    tags=[],  # TODO: Add tags support
+                    created_at=task.created_at
+                )
+        except Exception as e:
+            logger.warning(f"Failed to update task in vector DB: {str(e)}")
+            # Don't fail the request if vector update fails
+    
     # Prepare changes for WebSocket notification
     changes = {}
     for mod in modifications:
@@ -500,6 +569,14 @@ async def delete_task(
     )
     
     await db.commit()
+    
+    # Delete from vector database
+    try:
+        vector_service = get_vector_service()
+        await vector_service.delete_task(task_id)
+    except Exception as e:
+        logger.warning(f"Failed to delete task from vector DB: {str(e)}")
+        # Don't fail the request if vector deletion fails
     
     # Get workspace ID for notification
     task_list = await db.get(TaskList, task.list_id)
@@ -811,3 +888,241 @@ async def search_tasks(
         responses.append(response)
     
     return responses
+
+
+@router.post("/tasks/{task_id}/attachments", response_model=TaskAttachmentResponse, status_code=status.HTTP_201_CREATED)
+async def upload_task_attachment(
+    task_id: UUID,
+    request: Request,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Upload an attachment to a task"""
+    # Verify task exists and user has access
+    task = await get_task_with_permissions(task_id, current_user, db, "edit")
+    
+    # Validate file size (max 50MB)
+    max_size = 50 * 1024 * 1024  # 50MB
+    if file.size and file.size > max_size:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File too large. Maximum size is {max_size // (1024*1024)}MB"
+        )
+    
+    # Get access info
+    access_method, device_id, session_id, _, _ = await get_access_info_direct(
+        request, db
+    )
+    
+    try:
+        # Upload to storage
+        storage_service = get_storage_service()
+        file_data = await file.read()
+        file_size = len(file_data)
+        
+        upload_result = await storage_service.upload_file(
+            file_data=io.BytesIO(file_data),
+            file_name=file.filename,
+            file_size=file_size,
+            content_type=file.content_type or "application/octet-stream",
+            user_id=current_user.id,
+            task_id=task_id
+        )
+        
+        # Save attachment record
+        attachment = TaskAttachment(
+            task_id=task_id,
+            filename=file.filename,
+            file_size=file_size,
+            mime_type=file.content_type or "application/octet-stream",
+            storage_path=upload_result["object_name"],
+            storage_etag=upload_result.get("etag"),
+            storage_version_id=upload_result.get("version_id"),
+            uploaded_by=current_user.id
+        )
+        db.add(attachment)
+        
+        # Log activity
+        await log_activity(
+            db=db,
+            user_id=current_user.id,
+            action_type=ActionType.TASK_ATTACHMENT_ADD,
+            resource_type=ResourceType.ATTACHMENT,
+            resource_id=attachment.id,
+            device_id=device_id,
+            session_id=session_id,
+            access_method=access_method,
+            ip_address=request.client.host,
+            user_agent=request.headers.get("User-Agent"),
+            details={
+                "task_id": str(task_id),
+                "filename": file.filename,
+                "size": file_size
+            }
+        )
+        
+        await db.commit()
+        await db.refresh(attachment)
+        
+        # Build response
+        response = TaskAttachmentResponse.model_validate(attachment)
+        response.download_url = upload_result["url"]
+        response.uploader_name = current_user.name
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Failed to upload attachment: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to upload attachment"
+        )
+
+
+@router.get("/tasks/{task_id}/attachments", response_model=List[TaskAttachmentResponse])
+async def list_task_attachments(
+    task_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """List all attachments for a task"""
+    # Verify task exists and user has access
+    task = await get_task_with_permissions(task_id, current_user, db, "view")
+    
+    # Get attachments with uploader info
+    result = await db.execute(
+        select(TaskAttachment, User)
+        .join(User, User.id == TaskAttachment.uploaded_by)
+        .where(TaskAttachment.task_id == task_id)
+        .order_by(TaskAttachment.uploaded_at.desc())
+    )
+    
+    storage_service = get_storage_service()
+    attachments = []
+    
+    for attachment, uploader in result:
+        response = TaskAttachmentResponse.model_validate(attachment)
+        response.uploader_name = uploader.name
+        response.download_url = storage_service.get_file_url(attachment.storage_path)
+        attachments.append(response)
+    
+    return attachments
+
+
+@router.get("/attachments/{attachment_id}/download")
+async def download_attachment(
+    attachment_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Download an attachment"""
+    # Get attachment
+    attachment = await db.get(TaskAttachment, attachment_id)
+    if not attachment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Attachment not found"
+        )
+    
+    # Verify user has access to the task
+    task = await get_task_with_permissions(attachment.task_id, current_user, db, "view")
+    
+    try:
+        # Get file from storage
+        storage_service = get_storage_service()
+        file_data, metadata = await storage_service.download_file(attachment.storage_path)
+        
+        # Return file
+        return StreamingResponse(
+            io.BytesIO(file_data),
+            media_type=attachment.mime_type,
+            headers={
+                "Content-Disposition": f"attachment; filename={attachment.filename}",
+                "Content-Length": str(len(file_data))
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to download attachment: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to download attachment"
+        )
+
+
+@router.delete("/attachments/{attachment_id}")
+async def delete_attachment(
+    attachment_id: UUID,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete an attachment"""
+    # Get attachment
+    attachment = await db.get(TaskAttachment, attachment_id)
+    if not attachment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Attachment not found"
+        )
+    
+    # Verify user has permission (must be uploader or have delete permission on task)
+    task = await get_task_with_permissions(attachment.task_id, current_user, db, "view")
+    
+    can_delete = attachment.uploaded_by == current_user.id
+    if not can_delete:
+        # Check if user has delete permission on task
+        try:
+            await get_task_with_permissions(attachment.task_id, current_user, db, "delete")
+            can_delete = True
+        except:
+            pass
+    
+    if not can_delete:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot delete this attachment"
+        )
+    
+    # Get access info
+    access_method, device_id, session_id, _, _ = await get_access_info_direct(
+        request, db
+    )
+    
+    try:
+        # Delete from storage
+        storage_service = get_storage_service()
+        await storage_service.delete_file(attachment.storage_path)
+        
+        # Delete record
+        await db.delete(attachment)
+        
+        # Log activity
+        await log_activity(
+            db=db,
+            user_id=current_user.id,
+            action_type=ActionType.TASK_ATTACHMENT_DELETE,
+            resource_type=ResourceType.ATTACHMENT,
+            resource_id=attachment_id,
+            device_id=device_id,
+            session_id=session_id,
+            access_method=access_method,
+            ip_address=request.client.host,
+            user_agent=request.headers.get("User-Agent"),
+            details={
+                "task_id": str(attachment.task_id),
+                "filename": attachment.filename
+            }
+        )
+        
+        await db.commit()
+        
+        return {"message": "Attachment deleted successfully"}
+        
+    except Exception as e:
+        logger.error(f"Failed to delete attachment: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete attachment"
+        )

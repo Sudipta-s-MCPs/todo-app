@@ -225,6 +225,27 @@ export interface TaskUpdate {
   tags?: string[];
 }
 
+// AI Analysis Types
+export interface AIAnalysis {
+  suggested_action: 'create_new' | 'update_existing' | 'merge';
+  reasoning: string;
+  confidence: number;
+  suggested_title?: string;
+}
+
+export interface DuplicateTaskError {
+  detail: string;
+  duplicates: Task[];
+  similarity_scores: Record<string, {
+    title_similarity: number;
+    description_similarity: number;
+    combined_similarity: number;
+    ai_confidence?: number;
+    ai_reasoning?: string;
+  }>;
+  ai_analysis?: AIAnalysis;
+}
+
 export interface WorkspaceCreate {
   name: string;
   description?: string;

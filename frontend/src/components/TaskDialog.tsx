@@ -15,13 +15,24 @@ import {
   IconButton,
   Stack,
   FormHelperText,
+  Alert,
+  AlertTitle,
+  Typography,
+  LinearProgress,
+  Divider,
+  Paper,
 } from '@mui/material';
 import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
-import { Close as CloseIcon } from '@mui/icons-material';
+import { 
+  Close as CloseIcon,
+  SmartToy as AIIcon,
+  Update as UpdateIcon,
+  Add as AddIcon,
+} from '@mui/icons-material';
 import { useForm, Controller } from 'react-hook-form';
 import { useSnackbar } from 'notistack';
 
-import type { Task, TaskCreate, TaskUpdate, Workspace, List } from '../types';
+import type { Task, TaskCreate, TaskUpdate, Workspace, List, DuplicateTaskError } from '../types';
 import { listService } from '../services/listService';
 
 interface TaskDialogProps {
@@ -48,6 +59,8 @@ export default function TaskDialog({
   const [lists, setLists] = useState<List[]>([]);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string>(defaultWorkspaceId || '');
   const [loadingLists, setLoadingLists] = useState(false);
+  const [duplicateError, setDuplicateError] = useState<DuplicateTaskError | null>(null);
+  const [showDuplicateAlert, setShowDuplicateAlert] = useState(false);
 
   const {
     control,
@@ -99,6 +112,9 @@ export default function TaskDialog({
       setTags([]);
       setSelectedWorkspaceId(defaultWorkspaceId || '');
     }
+    // Reset duplicate state when dialog opens/closes
+    setDuplicateError(null);
+    setShowDuplicateAlert(false);
   }, [task, defaultWorkspaceId, reset]);
 
   // Fetch lists when workspace changes
@@ -139,21 +155,63 @@ export default function TaskDialog({
     setTags(tags.filter((t) => t !== tag));
   };
 
-  const onSubmit = async (data: TaskCreate & { list_id?: string } | TaskUpdate) => {
+  const onSubmit = async (data: TaskCreate & { list_id?: string } | TaskUpdate, forceCreate = false) => {
     setIsLoading(true);
     try {
-      await onSave({ ...data, tags });
+      // Add force_create parameter if forcing creation
+      const saveData = forceCreate && !task ? { ...data, tags, force_create: true } : { ...data, tags };
+      await onSave(saveData);
       enqueueSnackbar(task ? 'Task updated successfully' : 'Task created successfully', {
         variant: 'success',
       });
       onClose();
     } catch (error: any) {
+      // Check if it's a duplicate error (409 status)
+      if (error.response?.status === 409 && error.response?.data) {
+        setDuplicateError(error.response.data as DuplicateTaskError);
+        setShowDuplicateAlert(true);
+        setIsLoading(false);
+        return; // Don't close dialog, show duplicate options
+      }
+      
       enqueueSnackbar(error.response?.data?.detail || 'Failed to save task', {
         variant: 'error',
       });
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleUpdateExisting = async () => {
+    if (!duplicateError?.duplicates?.[0]) return;
+    
+    const existingTask = duplicateError.duplicates[0];
+    const aiAnalysis = duplicateError.ai_analysis;
+    
+    // Use AI suggested title if available
+    const updatedData: TaskUpdate = {
+      title: aiAnalysis?.suggested_title || watch('title'),
+      description: watch('description'),
+      tags,
+    };
+    
+    setIsLoading(true);
+    try {
+      // Update the existing task
+      await onSave({ ...updatedData, id: existingTask.id } as any);
+      enqueueSnackbar('Existing task updated successfully', { variant: 'success' });
+      onClose();
+    } catch (error: any) {
+      enqueueSnackbar('Failed to update existing task', { variant: 'error' });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleForceCreate = () => {
+    const formData = watch();
+    setShowDuplicateAlert(false);
+    onSubmit(formData, true);
   };
 
   return (
@@ -170,6 +228,103 @@ export default function TaskDialog({
         
         <DialogContent dividers>
           <Stack spacing={3}>
+            {/* AI Duplicate Alert */}
+            {showDuplicateAlert && duplicateError && (
+              <Alert 
+                severity="warning"
+                onClose={() => setShowDuplicateAlert(false)}
+                sx={{ mb: 2 }}
+              >
+                <AlertTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <AIIcon fontSize="small" />
+                  Potential Duplicate Detected
+                </AlertTitle>
+                
+                {duplicateError.ai_analysis && (
+                  <Box mb={2}>
+                    <Typography variant="body2" gutterBottom>
+                      <strong>AI Analysis ({Math.round(duplicateError.ai_analysis.confidence * 100)}% confident):</strong>
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" paragraph>
+                      {duplicateError.ai_analysis.reasoning}
+                    </Typography>
+                    
+                    {/* AI Confidence Bar */}
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                      <Typography variant="caption" sx={{ minWidth: 100 }}>
+                        AI Confidence:
+                      </Typography>
+                      <LinearProgress 
+                        variant="determinate" 
+                        value={duplicateError.ai_analysis.confidence * 100}
+                        sx={{ flex: 1, height: 8, borderRadius: 4 }}
+                        color={duplicateError.ai_analysis.confidence > 0.8 ? "success" : "warning"}
+                      />
+                      <Typography variant="caption">
+                        {Math.round(duplicateError.ai_analysis.confidence * 100)}%
+                      </Typography>
+                    </Box>
+                  </Box>
+                )}
+
+                <Divider sx={{ my: 2 }} />
+                
+                {/* Similar Tasks */}
+                <Typography variant="body2" gutterBottom>
+                  <strong>Similar existing tasks:</strong>
+                </Typography>
+                {duplicateError.duplicates.slice(0, 3).map((dupTask, index) => {
+                  const scores = duplicateError.similarity_scores[dupTask.id];
+                  return (
+                    <Paper key={dupTask.id} variant="outlined" sx={{ p: 1, mb: 1 }}>
+                      <Typography variant="body2" fontWeight="medium">
+                        {dupTask.title}
+                      </Typography>
+                      {dupTask.description && (
+                        <Typography variant="caption" color="text.secondary" noWrap>
+                          {dupTask.description}
+                        </Typography>
+                      )}
+                      {scores && (
+                        <Box sx={{ display: 'flex', gap: 2, mt: 0.5 }}>
+                          <Typography variant="caption" color="text.secondary">
+                            Title: {Math.round(scores.title_similarity * 100)}%
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            Combined: {Math.round(scores.combined_similarity * 100)}%
+                          </Typography>
+                        </Box>
+                      )}
+                    </Paper>
+                  );
+                })}
+                
+                {/* Action Buttons */}
+                <Box sx={{ display: 'flex', gap: 1, mt: 2 }}>
+                  {duplicateError.ai_analysis?.suggested_action === 'update_existing' && (
+                    <Button
+                      variant="contained"
+                      size="small"
+                      startIcon={<UpdateIcon />}
+                      onClick={handleUpdateExisting}
+                      disabled={isLoading}
+                    >
+                      Update Existing
+                      {duplicateError.ai_analysis.suggested_title && ' (with AI title)'}
+                    </Button>
+                  )}
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    startIcon={<AddIcon />}
+                    onClick={handleForceCreate}
+                    disabled={isLoading}
+                  >
+                    Create Anyway
+                  </Button>
+                </Box>
+              </Alert>
+            )}
             <Controller
               name="title"
               control={control}

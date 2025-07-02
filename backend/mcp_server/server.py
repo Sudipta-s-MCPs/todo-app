@@ -12,6 +12,9 @@ import httpx
 from fastmcp import FastMCP, Context
 from pydantic import BaseModel, Field
 
+# Import smart task parser
+from smart_task_parser import SmartTaskParser
+
 # Initialize FastMCP server
 mcp = FastMCP("Smart-ToDo MCP Server")
 
@@ -511,6 +514,189 @@ async def get_upcoming_tasks(
             "count": len(tasks),
             "days": days,
             "tasks": tasks
+        }
+
+
+@mcp.tool
+async def smart_create_task(
+    natural_text: str,
+    ctx: Context
+) -> Dict[str, Any]:
+    """
+    Create a task from natural language input using AI
+    
+    This tool uses AI to parse natural language and automatically:
+    - Extract task title and description
+    - Determine the best workspace and list
+    - Set priority based on urgency keywords
+    - Extract due dates from natural language
+    - Identify subtasks, mentions, and tags
+    
+    Examples:
+    - "Schedule meeting with John next Tuesday at 2pm to discuss Q4 budget"
+    - "Buy groceries tomorrow - milk, eggs, bread"
+    - "Fix the login bug in production ASAP"
+    """
+    await ctx.info(f"Parsing natural language task: {natural_text[:50]}...")
+    
+    # Initialize parser
+    parser = SmartTaskParser()
+    
+    async with get_http_client() as client:
+        # Get user's workspaces and lists
+        workspaces_response = await client.get("/workspaces")
+        workspaces_response.raise_for_status()
+        workspaces = workspaces_response.json()
+        
+        # Get all lists
+        lists = await get_user_lists()
+        
+        # Parse the task using AI
+        parsed = await parser.parse_task(
+            natural_text,
+            workspaces,
+            lists,
+            USER_ID
+        )
+        
+        await ctx.info(f"Parsed task: {parser.generate_task_summary(parsed)}")
+        
+        # Find the target list
+        target_list = None
+        
+        # First try to find by parsed list name
+        if parsed.get('list'):
+            for lst in lists:
+                if lst['name'].lower() == parsed['list'].lower():
+                    target_list = lst
+                    break
+        
+        # If not found, try by workspace
+        if not target_list and parsed.get('workspace'):
+            for lst in lists:
+                if lst['workspace_name'].lower() == parsed['workspace'].lower():
+                    target_list = lst
+                    break
+        
+        # Default to first list
+        if not target_list and lists:
+            target_list = lists[0]
+        
+        if not target_list:
+            await ctx.error("No lists found. Please create a workspace and list first.")
+            return {"error": "No lists available"}
+        
+        # Prepare task data
+        task_data = {
+            "title": parsed['title'],
+            "description": parsed.get('description'),
+            "priority": parsed.get('priority', 'medium'),
+            "task_metadata": {
+                "created_via": "mcp_smart",
+                "ai_confidence": parsed.get('confidence', 0),
+                "natural_text": natural_text
+            }
+        }
+        
+        if parsed.get('due_date'):
+            task_data["due_date"] = parsed['due_date']
+        
+        # Add extracted metadata
+        if parsed.get('tags'):
+            task_data["task_metadata"]["tags"] = parsed['tags']
+        if parsed.get('mentions'):
+            task_data["task_metadata"]["mentions"] = parsed['mentions']
+        if parsed.get('entities'):
+            task_data["task_metadata"]["entities"] = parsed['entities']
+        
+        # Create the main task
+        response = await client.post(
+            f"/lists/{target_list['id']}/tasks",
+            json=task_data
+        )
+        
+        # Handle duplicate detection
+        if response.status_code == 409:
+            conflict_data = response.json()
+            duplicates = conflict_data.get("duplicates", [])
+            ai_analysis = conflict_data.get("ai_analysis", {})
+            
+            if duplicates:
+                await ctx.warning(f"Found {len(duplicates)} potential duplicate(s)")
+                
+                # Use AI suggestion if available
+                if ai_analysis.get("suggested_action") == "update_existing":
+                    # Update the existing task
+                    existing_task_id = duplicates[0]['id']
+                    update_data = {
+                        "title": ai_analysis.get("suggested_title", parsed['title']),
+                        "description": task_data.get('description')
+                    }
+                    
+                    response = await client.put(
+                        f"/tasks/{existing_task_id}",
+                        json=update_data
+                    )
+                    response.raise_for_status()
+                    
+                    await ctx.info(f"Updated existing task: {duplicates[0]['title']}")
+                    return {
+                        "status": "updated_existing",
+                        "task": response.json(),
+                        "ai_reasoning": ai_analysis.get("reasoning")
+                    }
+                else:
+                    # Ask for confirmation to create anyway
+                    confirm = await ctx.sample(
+                        f"AI suggests this might be a duplicate of '{duplicates[0]['title']}'. "
+                        f"Create anyway? (yes/no)"
+                    )
+                    
+                    if "yes" in confirm.text.lower():
+                        response = await client.post(
+                            f"/lists/{target_list['id']}/tasks?force_create=true",
+                            json=task_data
+                        )
+                    else:
+                        return {
+                            "status": "cancelled",
+                            "reason": "duplicate_found",
+                            "existing_task": duplicates[0]
+                        }
+        
+        response.raise_for_status()
+        created_task = response.json()
+        
+        # Create subtasks if any were extracted
+        if parsed.get('subtasks'):
+            await ctx.info(f"Creating {len(parsed['subtasks'])} subtask(s)...")
+            
+            for subtask_title in parsed['subtasks']:
+                subtask_data = {
+                    "title": subtask_title,
+                    "priority": "medium",
+                    "parent_task_id": created_task['id'],
+                    "task_metadata": {"created_via": "mcp_smart_subtask"}
+                }
+                
+                try:
+                    sub_response = await client.post(
+                        f"/lists/{target_list['id']}/tasks?force_create=true",
+                        json=subtask_data
+                    )
+                    sub_response.raise_for_status()
+                except Exception as e:
+                    await ctx.warning(f"Failed to create subtask: {subtask_title}")
+        
+        await ctx.info(f"Task created successfully: {created_task['id']}")
+        
+        return {
+            "status": "created",
+            "task": created_task,
+            "list": target_list['name'],
+            "workspace": target_list['workspace_name'],
+            "parsed_data": parsed,
+            "subtasks_created": len(parsed.get('subtasks', []))
         }
 
 

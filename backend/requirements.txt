@@ -53,3 +53,13 @@ psutil==5.9.8
 
 # LDAP Authentication
 ldap3==2.9.1
+
+# AI Integration
+groq==0.9.0
+
+# Vector Database
+qdrant-client==1.7.0
+sentence-transformers==2.2.2
+
+# Object Storage
+minio==7.2.0

@@ -12,18 +12,25 @@ Smart-ToDo is an advanced task management application with multi-device support,
 
 - **🔐 Multi-Device Support**: Track which device and method created/modified each task
 - **🤖 AI Agent Integration**: Full MCP protocol support for AI assistants with task management tools
-- **🔍 Smart Duplicate Detection**: Prevent duplicate tasks using similarity algorithms (80% threshold)
+- **🧠 AI-Powered Features**: 
+  - Semantic duplicate detection using Groq LLM (Llama 3.1)
+  - Natural language task creation with smart parsing
+  - Automatic workspace/list categorization
+  - Intelligent task suggestions and merging
+- **🔍 Smart Duplicate Detection**: AI-enhanced detection with semantic understanding + traditional similarity algorithms
 - **📊 Admin Panel**: React-based admin interface for user, MCP agent, and system management
 - **🔄 Real-time Updates**: WebSocket support for live collaboration and notifications
 - **🏷️ Flexible Organization**: Workspaces, lists, tags, and task assignments
 - **📱 API-First Design**: RESTful API with OpenAPI documentation and multiple auth methods
 - **🐳 Production-Ready**: Fully containerized with health checks and monitoring support
+- **💰 Cost-Effective AI**: Optimized to stay under $2/month even with 10+ active users
 
 ## Documentation Index
 
 All project documentation is organized in the `/docs` folder:
 
 - [API Documentation](docs/api.md) - REST API endpoints and usage
+- [AI Features Guide](docs/ai-features.md) - AI-powered capabilities and configuration
 - [MCP Integration Guide](docs/mcp-integration.md) - MCP server setup and tools
 - [Admin Panel Guide](docs/admin-panel.md) - Admin interface documentation
 - [Deployment Guide](docs/deployment.md) - Docker and Synology NAS deployment

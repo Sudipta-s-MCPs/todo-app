@@ -149,6 +149,10 @@ class TaskAttachment(Base):
     mime_type = Column(String(100), nullable=False)
     storage_path = Column(String(500), nullable=False)
     
+    # Storage metadata
+    storage_etag = Column(String(255))
+    storage_version_id = Column(String(255))
+    
     uploaded_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     uploaded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     

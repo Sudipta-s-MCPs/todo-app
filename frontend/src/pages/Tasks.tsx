@@ -17,6 +17,9 @@ import {
   Button,
   Menu,
   Divider,
+  SpeedDial,
+  SpeedDialAction,
+  SpeedDialIcon,
 } from '@mui/material';
 import {
   Search as SearchIcon,
@@ -26,6 +29,7 @@ import {
   Clear as ClearIcon,
   Delete as DeleteIcon,
   Done as DoneIcon,
+  SmartToy as AIIcon,
 } from '@mui/icons-material';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSnackbar } from 'notistack';
@@ -33,6 +37,7 @@ import { useDebounce } from 'use-debounce';
 
 import TaskCard from '../components/TaskCard';
 import TaskDialog from '../components/TaskDialog';
+import SmartTaskInput from '../components/SmartTaskInput';
 import { taskService } from '../services/taskService';
 import { workspaceService } from '../services/workspaceService';
 import type { Task, TaskCreate, TaskUpdate, Workspace } from '../types';
@@ -51,6 +56,7 @@ export default function Tasks() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [selectedTasks, setSelectedTasks] = useState<Set<string>>(new Set());
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
+  const [smartTaskDialogOpen, setSmartTaskDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | undefined>();
   const [filterMenuAnchor, setFilterMenuAnchor] = useState<null | HTMLElement>(null);
   const [sortMenuAnchor, setSortMenuAnchor] = useState<null | HTMLElement>(null);
@@ -347,19 +353,40 @@ export default function Tasks() {
         </Box>
       )}
 
-      <Fab
-        color="primary"
+      <SpeedDial
+        ariaLabel="Create task options"
         sx={{ position: 'fixed', bottom: 16, right: 16 }}
-        onClick={handleCreateTask}
+        icon={<SpeedDialIcon />}
       >
-        <AddIcon />
-      </Fab>
+        <SpeedDialAction
+          icon={<AddIcon />}
+          tooltipTitle="Create Task"
+          onClick={handleCreateTask}
+        />
+        <SpeedDialAction
+          icon={<AIIcon />}
+          tooltipTitle="Smart Create (AI)"
+          onClick={() => setSmartTaskDialogOpen(true)}
+        />
+      </SpeedDial>
 
       <TaskDialog
         open={taskDialogOpen}
         onClose={() => setTaskDialogOpen(false)}
         onSave={handleSaveTask}
         task={editingTask}
+        workspaces={workspaces}
+        defaultWorkspaceId={selectedWorkspace}
+      />
+
+      <SmartTaskInput
+        open={smartTaskDialogOpen}
+        onClose={() => setSmartTaskDialogOpen(false)}
+        onTaskCreated={(task) => {
+          queryClient.invalidateQueries({ queryKey: ['tasks'] });
+          queryClient.invalidateQueries({ queryKey: ['stats'] });
+          enqueueSnackbar('Task created successfully!', { variant: 'success' });
+        }}
         workspaces={workspaces}
         defaultWorkspaceId={selectedWorkspace}
       />

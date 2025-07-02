@@ -3,24 +3,24 @@ Workspace management API endpoints
 Created: 2025-01-30 14:22:00 PST
 """
 
-from typing import List, Optional
+from typing import List as TypingList, Optional
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_
+from sqlalchemy import select, func, and_, or_
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.models.workspace import Workspace, WorkspaceMember, List, WorkspaceType, WorkspaceRole
+from app.models.workspace import Workspace, WorkspaceMember, List, WorkspaceType, WorkspaceRole, ListType
 from app.models.user import User
-from app.models.task import Task
+from app.models.task import Task, TaskStatus
 from app.models.activity import ActionType, ResourceType
 from app.schemas.workspace import (
     WorkspaceCreate, WorkspaceUpdate, WorkspaceResponse,
     WorkspaceMemberAdd, WorkspaceMemberUpdate, WorkspaceMemberResponse,
     ListCreate, ListUpdate, ListResponse, ListReorder
 )
-from app.api.deps import get_current_user, get_access_info
+from app.api.deps import get_current_user, get_access_info, get_access_info_direct
 from app.services.activity import log_activity
 
 router = APIRouter()
@@ -113,13 +113,13 @@ async def create_workspace(
     db.add(default_list)
     
     # Log activity
-    access_method, device_id, session_id, _, _ = await get_access_info(
-        request, db=db
+    access_method, device_id, session_id, _, _ = await get_access_info_direct(
+        request, db
     )
     await log_activity(
         db=db,
         user_id=current_user.id,
-        action_type=ActionType.WORKSPACE_CREATE,
+        action_type=ActionType.WORKSPACE_CREATE.value,
         resource_type=ResourceType.WORKSPACE,
         resource_id=workspace.id,
         device_id=device_id,
@@ -138,38 +138,46 @@ async def create_workspace(
     return response
 
 
-@router.get("/", response_model=List[WorkspaceResponse])
+@router.get("/", response_model=TypingList[WorkspaceResponse])
 async def list_workspaces(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """List all user workspaces"""
-    # Get owned workspaces
-    owned_query = select(Workspace).where(
-        Workspace.owner_id == current_user.id,
-        Workspace.is_active == True
+    # Get workspaces owned by user
+    owned_result = await db.execute(
+        select(Workspace).where(
+            Workspace.owner_id == current_user.id,
+            Workspace.is_active == True
+        )
     )
+    owned_workspaces = owned_result.scalars().all()
     
-    # Get member workspaces
-    member_query = select(Workspace).join(
-        WorkspaceMember,
-        WorkspaceMember.workspace_id == Workspace.id
-    ).where(
-        WorkspaceMember.user_id == current_user.id,
-        Workspace.is_active == True
+    # Get workspaces where user is a member
+    member_result = await db.execute(
+        select(Workspace)
+        .join(WorkspaceMember, WorkspaceMember.workspace_id == Workspace.id)
+        .where(
+            WorkspaceMember.user_id == current_user.id,
+            Workspace.is_active == True
+        )
     )
+    member_workspaces = member_result.scalars().all()
     
-    # Combine queries
-    result = await db.execute(
-        owned_query.union(member_query).order_by(Workspace.created_at.desc())
-    )
-    workspaces = result.scalars().all()
+    # Combine and deduplicate
+    workspace_dict = {}
+    for workspace in owned_workspaces + member_workspaces:
+        workspace_dict[workspace.id] = workspace
+    
+    workspaces = sorted(workspace_dict.values(), key=lambda w: w.created_at, reverse=True)
     
     # Get member counts
     workspace_ids = [w.id for w in workspaces]
     member_counts = {}
+    task_counts = {}
     
     if workspace_ids:
+        # Get member counts
         result = await db.execute(
             select(
                 WorkspaceMember.workspace_id,
@@ -181,6 +189,21 @@ async def list_workspaces(
         
         for row in result:
             member_counts[row.workspace_id] = row.count
+        
+        # Get task counts
+        result = await db.execute(
+            select(
+                List.workspace_id,
+                func.count(Task.id).label("count")
+            )
+            .join(Task, Task.list_id == List.id)
+            .where(List.workspace_id.in_(workspace_ids))
+            .where(Task.status != TaskStatus.ARCHIVED)
+            .group_by(List.workspace_id)
+        )
+        
+        for row in result:
+            task_counts[row.workspace_id] = row.count
     
     # Build responses
     responses = []
@@ -188,6 +211,7 @@ async def list_workspaces(
         response = WorkspaceResponse.model_validate(workspace)
         # Add 1 for owner
         response.member_count = member_counts.get(workspace.id, 0) + 1
+        response.task_count = task_counts.get(workspace.id, 0)
         responses.append(response)
     
     return responses
@@ -211,8 +235,18 @@ async def get_workspace(
     )
     member_count = result.scalar() or 0
     
+    # Get task count
+    result = await db.execute(
+        select(func.count(Task.id))
+        .join(List, Task.list_id == List.id)
+        .where(List.workspace_id == workspace_id)
+        .where(Task.status != TaskStatus.ARCHIVED)
+    )
+    task_count = result.scalar() or 0
+    
     response = WorkspaceResponse.model_validate(workspace)
     response.member_count = member_count + 1  # Add owner
+    response.task_count = task_count
     return response
 
 
@@ -236,13 +270,13 @@ async def update_workspace(
         workspace.settings_json = workspace_data.settings
     
     # Log activity
-    access_method, device_id, session_id, _, _ = await get_access_info(
-        request, db=db
+    access_method, device_id, session_id, _, _ = await get_access_info_direct(
+        request, db
     )
     await log_activity(
         db=db,
         user_id=current_user.id,
-        action_type=ActionType.WORKSPACE_UPDATE,
+        action_type=ActionType.WORKSPACE_UPDATE.value,
         resource_type=ResourceType.WORKSPACE,
         resource_id=workspace.id,
         device_id=device_id,
@@ -273,13 +307,13 @@ async def delete_workspace(
     workspace.is_active = False
     
     # Log activity
-    access_method, device_id, session_id, _, _ = await get_access_info(
-        request, db=db
+    access_method, device_id, session_id, _, _ = await get_access_info_direct(
+        request, db
     )
     await log_activity(
         db=db,
         user_id=current_user.id,
-        action_type=ActionType.WORKSPACE_DELETE,
+        action_type=ActionType.WORKSPACE_DELETE.value,
         resource_type=ResourceType.WORKSPACE,
         resource_id=workspace.id,
         device_id=device_id,
@@ -295,7 +329,7 @@ async def delete_workspace(
 
 
 # Workspace member endpoints
-@router.get("/{workspace_id}/members", response_model=List[WorkspaceMemberResponse])
+@router.get("/{workspace_id}/members", response_model=TypingList[WorkspaceMemberResponse])
 async def list_workspace_members(
     workspace_id: UUID,
     current_user: User = Depends(get_current_user),
@@ -402,13 +436,13 @@ async def add_workspace_member(
     db.add(member)
     
     # Log activity
-    access_method, device_id, session_id, _, _ = await get_access_info(
-        request, db=db
+    access_method, device_id, session_id, _, _ = await get_access_info_direct(
+        request, db
     )
     await log_activity(
         db=db,
         user_id=current_user.id,
-        action_type=ActionType.WORKSPACE_MEMBER_ADD,
+        action_type=ActionType.WORKSPACE_MEMBER_ADD.value,
         resource_type=ResourceType.WORKSPACE,
         resource_id=workspace_id,
         device_id=device_id,
@@ -464,13 +498,13 @@ async def create_list(
     db.add(new_list)
     
     # Log activity
-    access_method, device_id, session_id, _, _ = await get_access_info(
-        request, db=db
+    access_method, device_id, session_id, _, _ = await get_access_info_direct(
+        request, db
     )
     await log_activity(
         db=db,
         user_id=current_user.id,
-        action_type=ActionType.LIST_CREATE,
+        action_type=ActionType.LIST_CREATE.value,
         resource_type=ResourceType.LIST,
         resource_id=new_list.id,
         device_id=device_id,
@@ -489,7 +523,7 @@ async def create_list(
     return response
 
 
-@router.get("/{workspace_id}/lists", response_model=List[ListResponse])
+@router.get("/{workspace_id}/lists", response_model=TypingList[ListResponse])
 async def list_workspace_lists(
     workspace_id: UUID,
     include_archived: bool = False,

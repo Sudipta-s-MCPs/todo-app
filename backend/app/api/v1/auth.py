@@ -19,23 +19,27 @@ from app.models.user import User, UserDevice, UserSession, APIKey, MCPAgent, Dev
 from app.models.activity import ActivityLog, ActionType, ResourceType
 from app.config import settings
 from app.schemas.auth import (
-    UserRegister, UserLogin, Token, TokenRefresh, PasswordReset,
+    UserRegister, UserLogin, Token, TokenRefresh, LoginResponse, PasswordReset,
     PasswordResetConfirm, PasswordChange, DeviceInfo, APIKeyCreate,
     APIKeyResponse, APIKeyInfo, MCPAgentRegister, MCPAgentResponse,
     MCPAgentInfo, TwoFactorEnable, TwoFactorConfirm, UserInfo
 )
-from app.api.deps import get_current_user, get_access_info
+from app.api.deps import get_current_user, get_access_info, get_access_info_direct, get_current_admin_user, is_admin_user
 from app.utils.security import (
     verify_password, get_password_hash, create_access_token,
     create_refresh_token, create_mcp_token, decode_token,
     generate_api_key, generate_totp_secret, generate_token
 )
 from app.services.activity import log_activity
+from app.middleware import rate_limit
+from app.utils.logging import security_logger
+from app.services.ldap import ldap_service, create_user_from_ldap, sync_user_from_ldap
 
 router = APIRouter()
 
 
 @router.post("/register", response_model=UserInfo, status_code=status.HTTP_201_CREATED)
+@rate_limit(requests_per_minute=5)  # Limit registration attempts
 async def register(
     request: Request,
     user_data: UserRegister,
@@ -68,7 +72,7 @@ async def register(
     await log_activity(
         db=db,
         user_id=user.id,
-        action_type=ActionType.REGISTER,
+        action_type=ActionType.REGISTER.value,
         resource_type=ResourceType.USER,
         resource_id=user.id,
         access_method=AccessMethod.WEB,
@@ -79,27 +83,92 @@ async def register(
     return user
 
 
-@router.post("/login", response_model=Token)
+@router.post("/login", response_model=LoginResponse)
+@rate_limit(requests_per_minute=10)  # Limit login attempts
 async def login(
     request: Request,
     response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db)
 ):
-    """Login with email and password"""
-    # Find user
+    """Login with email/username and password (supports LDAP)"""
+    # Try to find user by email or external_id (for LDAP users)
     result = await db.execute(
-        select(User).where(User.email == form_data.username)
+        select(User).where(
+            or_(
+                User.email == form_data.username,
+                User.external_id == form_data.username
+            )
+        )
     )
     user = result.scalar_one_or_none()
     
-    if not user or not verify_password(form_data.password, user.password_hash):
+    # Check if LDAP is enabled
+    if settings.LDAP_ENABLED:
+        # If user doesn't exist or is an LDAP user, try LDAP authentication
+        if not user or user.auth_provider == "ldap":
+            ldap_result = await ldap_service.authenticate(
+                form_data.username,
+                form_data.password
+            )
+            
+            if ldap_result.success and ldap_result.user_info:
+                if not user:
+                    # Auto-create user from LDAP if enabled
+                    if settings.LDAP_AUTO_CREATE_USER:
+                        user = await create_user_from_ldap(ldap_result.user_info, db)
+                    else:
+                        raise HTTPException(
+                            status_code=status.HTTP_403_FORBIDDEN,
+                            detail="User not registered. Please contact administrator."
+                        )
+                else:
+                    # Sync user data from LDAP
+                    await sync_user_from_ldap(user, ldap_result.user_info)
+                    await db.commit()
+            elif user and user.auth_provider == "ldap":
+                # LDAP user but LDAP auth failed
+                security_logger.log_auth_failure(
+                    ip_address=request.client.host,
+                    email=form_data.username,
+                    reason="LDAP authentication failed"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid LDAP credentials"
+                )
+            # If LDAP auth failed but user is local, fall through to local auth
+    
+    # Local authentication (if not LDAP user or LDAP disabled)
+    if user and user.auth_provider == "local":
+        if not user.password_hash or not verify_password(form_data.password, user.password_hash):
+            security_logger.log_auth_failure(
+                ip_address=request.client.host,
+                email=form_data.username,
+                reason="Invalid credentials"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect email or password"
+            )
+    elif not user:
+        # User doesn't exist and LDAP didn't create one
+        security_logger.log_auth_failure(
+            ip_address=request.client.host,
+            email=form_data.username,
+            reason="User not found"
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password"
         )
     
     if not user.is_active:
+        security_logger.log_auth_failure(
+            ip_address=request.client.host,
+            email=form_data.username,
+            reason="Account inactive"
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account is inactive"
@@ -176,6 +245,13 @@ async def login(
         user_agent=request.headers.get("User-Agent")
     )
     
+    # Log successful authentication
+    security_logger.log_auth_success(
+        user_id=str(user.id),
+        ip_address=request.client.host,
+        method="password"
+    )
+    
     # Set refresh token as httpOnly cookie
     response.set_cookie(
         key="refresh_token",
@@ -186,10 +262,24 @@ async def login(
         max_age=7 * 24 * 60 * 60  # 7 days
     )
     
-    return Token(
+    return LoginResponse(
         access_token=access_token,
         refresh_token=refresh_token,
-        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        user=UserInfo(
+            id=user.id,
+            email=user.email,
+            name=user.name,
+            avatar_url=user.avatar_url,
+            timezone=user.timezone,
+            locale=user.locale,
+            is_active=user.is_active,
+            is_verified=user.is_verified,
+            is_admin=is_admin_user(user),
+            two_factor_enabled=user.two_factor_enabled,
+            created_at=user.created_at,
+            last_active_at=user.last_active_at
+        )
     )
 
 
@@ -284,7 +374,7 @@ async def logout(
                     await log_activity(
                         db=db,
                         user_id=current_user.id,
-                        action_type=ActionType.LOGOUT,
+                        action_type=ActionType.LOGOUT.value,
                         resource_type=ResourceType.SESSION,
                         resource_id=session.id,
                         device_id=session.device_id,
@@ -333,13 +423,13 @@ async def update_user_info(
     current_user.updated_at = datetime.utcnow()
     
     # Log activity
-    access_method, device_id, session_id, _, _ = await get_access_info(
-        request, db=db
+    access_method, device_id, session_id, _, _ = await get_access_info_direct(
+        request, db
     )
     await log_activity(
         db=db,
         user_id=current_user.id,
-        action_type=ActionType.PROFILE_UPDATE,
+        action_type=ActionType.PROFILE_UPDATE.value,
         resource_type=ResourceType.USER,
         resource_id=current_user.id,
         device_id=device_id,
@@ -395,13 +485,13 @@ async def change_password(
             session.is_active = False
     
     # Log activity
-    access_method, device_id, session_id, _, _ = await get_access_info(
-        request, db=db
+    access_method, device_id, session_id, _, _ = await get_access_info_direct(
+        request, db
     )
     await log_activity(
         db=db,
         user_id=current_user.id,
-        action_type=ActionType.PASSWORD_CHANGE,
+        action_type=ActionType.PASSWORD_CHANGE.value,
         resource_type=ResourceType.USER,
         resource_id=current_user.id,
         device_id=device_id,
@@ -484,13 +574,13 @@ async def remove_device(
         session.is_active = False
     
     # Log activity
-    access_method, current_device_id, session_id, _, _ = await get_access_info(
-        request, db=db
+    access_method, current_device_id, session_id, _, _ = await get_access_info_direct(
+        request, db
     )
     await log_activity(
         db=db,
         user_id=current_user.id,
-        action_type=ActionType.DEVICE_REMOVE,
+        action_type=ActionType.DEVICE_REMOVE.value,
         resource_type=ResourceType.DEVICE,
         resource_id=device.id,
         device_id=current_device_id,
@@ -533,13 +623,13 @@ async def create_api_key(
     db.add(api_key)
     
     # Log activity
-    access_method, device_id, session_id, _, _ = await get_access_info(
-        request, db=db
+    access_method, device_id, session_id, _, _ = await get_access_info_direct(
+        request, db
     )
     await log_activity(
         db=db,
         user_id=current_user.id,
-        action_type=ActionType.API_KEY_CREATE,
+        action_type=ActionType.API_KEY_CREATE.value,
         resource_type=ResourceType.API_KEY,
         resource_id=api_key.id,
         device_id=device_id,
@@ -606,13 +696,13 @@ async def delete_api_key(
     api_key.is_active = False
     
     # Log activity
-    access_method, device_id, session_id, _, _ = await get_access_info(
-        request, db=db
+    access_method, device_id, session_id, _, _ = await get_access_info_direct(
+        request, db
     )
     await log_activity(
         db=db,
         user_id=current_user.id,
-        action_type=ActionType.API_KEY_DELETE,
+        action_type=ActionType.API_KEY_DELETE.value,
         resource_type=ResourceType.API_KEY,
         resource_id=api_key.id,
         device_id=device_id,
@@ -661,13 +751,13 @@ async def register_mcp_agent(
     db.add(api_key)
     
     # Log activity
-    access_method, device_id, session_id, _, _ = await get_access_info(
-        request, db=db
+    access_method, device_id, session_id, _, _ = await get_access_info_direct(
+        request, db
     )
     await log_activity(
         db=db,
         user_id=current_user.id,
-        action_type=ActionType.MCP_AGENT_REGISTER,
+        action_type=ActionType.MCP_AGENT_REGISTER.value,
         resource_type=ResourceType.MCP_AGENT,
         resource_id=mcp_agent.id,
         device_id=device_id,
@@ -717,8 +807,8 @@ async def mcp_heartbeat(
 ):
     """Update MCP agent heartbeat"""
     # Get agent ID from token or API key
-    access_method, _, _, api_key_id, mcp_agent_id = await get_access_info(
-        request, db=db
+    access_method, _, _, api_key_id, mcp_agent_id = await get_access_info_direct(
+        request, db
     )
     
     if not mcp_agent_id:
@@ -840,13 +930,13 @@ async def confirm_two_factor(
     current_user.two_factor_enabled = True
     
     # Log activity
-    access_method, device_id, session_id, _, _ = await get_access_info(
-        request, db=db
+    access_method, device_id, session_id, _, _ = await get_access_info_direct(
+        request, db
     )
     await log_activity(
         db=db,
         user_id=current_user.id,
-        action_type=ActionType.TWO_FACTOR_ENABLE,
+        action_type=ActionType.TWO_FACTOR_ENABLE.value,
         resource_type=ResourceType.USER,
         resource_id=current_user.id,
         device_id=device_id,
@@ -859,3 +949,104 @@ async def confirm_two_factor(
     await db.commit()
     
     return {"message": "Two-factor authentication enabled successfully"}
+
+
+@router.post("/ldap/sync")
+async def sync_ldap_user(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Sync current user data from LDAP"""
+    if not settings.LDAP_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="LDAP authentication is not enabled"
+        )
+    
+    if current_user.auth_provider != "ldap":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User is not an LDAP user"
+        )
+    
+    # Get user info from LDAP
+    ldap_info = await ldap_service.get_user_info(current_user.email)
+    if not ldap_info:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found in LDAP directory"
+        )
+    
+    # Sync user data
+    await sync_user_from_ldap(current_user, ldap_info)
+    
+    # Log activity
+    access_method, device_id, session_id, _, _ = await get_access_info_direct(
+        request, db
+    )
+    await log_activity(
+        db=db,
+        user_id=current_user.id,
+        action_type=ActionType.USER_UPDATE.value,
+        resource_type=ResourceType.USER,
+        resource_id=current_user.id,
+        device_id=device_id,
+        session_id=session_id,
+        access_method=access_method,
+        ip_address=request.client.host,
+        user_agent=request.headers.get("User-Agent"),
+        details={"source": "ldap_sync"}
+    )
+    
+    await db.commit()
+    
+    return {
+        "message": "User synchronized from LDAP",
+        "updated_fields": ["name", "ldap_dn", "external_id"]
+    }
+
+
+@router.get("/ldap/search")
+async def search_ldap_users(
+    query: str,
+    current_user: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Search for users in LDAP directory (admin only)"""
+    if not settings.LDAP_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="LDAP authentication is not enabled"
+        )
+    
+    if len(query) < 3:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Query must be at least 3 characters"
+        )
+    
+    # Search LDAP
+    ldap_users = await ldap_service.search_users(query)
+    
+    # Check which users already exist
+    emails = [user.email for user in ldap_users]
+    if emails:
+        result = await db.execute(
+            select(User.email).where(User.email.in_(emails))
+        )
+        existing_emails = {row[0] for row in result}
+    else:
+        existing_emails = set()
+    
+    # Format response
+    return [
+        {
+            "uid": user.uid,
+            "email": user.email,
+            "name": user.name,
+            "dn": user.dn,
+            "exists": user.email in existing_emails
+        }
+        for user in ldap_users
+    ]

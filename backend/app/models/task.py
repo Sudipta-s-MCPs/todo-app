@@ -45,7 +45,7 @@ class Task(Base):
     # Attribution fields
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     created_via_device_id = Column(UUID(as_uuid=True), ForeignKey("user_devices.id"), nullable=True)
-    created_via_method = Column(SQLEnum(AccessMethod), nullable=False)
+    created_via_method = Column(String(50), nullable=False)
     created_via_session_id = Column(UUID(as_uuid=True), ForeignKey("user_sessions.id"), nullable=True)
     
     # Task fields
@@ -55,7 +55,7 @@ class Task(Base):
     
     # Metadata
     position = Column(Integer, default=0)
-    metadata = Column(JSON, default=dict)
+    task_metadata = Column(JSON, default=dict)
     
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -87,7 +87,8 @@ class TaskAssignment(Base):
     
     # Relationships
     task = relationship("Task", back_populates="assignments")
-    user = relationship("User", back_populates="assigned_tasks")
+    user = relationship("User", foreign_keys=[user_id], back_populates="assigned_tasks")
+    assigner = relationship("User", foreign_keys=[assigned_by])
 
 
 class TaskModification(Base):
@@ -103,7 +104,7 @@ class TaskModification(Base):
     # Attribution
     modified_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     modified_via_device_id = Column(UUID(as_uuid=True), ForeignKey("user_devices.id"), nullable=True)
-    modified_via_method = Column(SQLEnum(AccessMethod), nullable=False)
+    modified_via_method = Column(String(50), nullable=False)
     modified_via_session_id = Column(UUID(as_uuid=True), ForeignKey("user_sessions.id"), nullable=True)
     
     modified_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -126,7 +127,7 @@ class TaskComment(Base):
     # Attribution
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     created_via_device_id = Column(UUID(as_uuid=True), ForeignKey("user_devices.id"), nullable=True)
-    created_via_method = Column(SQLEnum(AccessMethod), nullable=False)
+    created_via_method = Column(String(50), nullable=False)
     
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

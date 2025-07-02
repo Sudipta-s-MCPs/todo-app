@@ -69,7 +69,8 @@ class WorkspaceMember(Base):
     
     # Relationships
     workspace = relationship("Workspace", back_populates="members")
-    user = relationship("User", back_populates="workspace_memberships")
+    user = relationship("User", foreign_keys=[user_id], back_populates="workspace_memberships")
+    inviter = relationship("User", foreign_keys=[invited_by])
 
 
 class List(Base):

@@ -26,10 +26,11 @@ from app.schemas.task import (
     TaskMoveRequest, TaskBulkOperation, DuplicateCheckResult,
     TaskSearchQuery
 )
-from app.api.deps import get_current_user, get_access_info, get_device_info
+from app.api.deps import get_current_user, get_access_info, get_access_info_direct, get_device_info
 from app.services.activity import log_activity
 from app.services.duplicate_detection import DuplicateDetector
 from app.utils.security import calculate_similarity_hash
+from app.websockets.notifications import notifications
 
 router = APIRouter()
 
@@ -167,8 +168,8 @@ async def create_task(
             )
     
     # Get access info
-    access_method, device_id, session_id, _, _ = await get_access_info(
-        request, db=db
+    access_method, device_id, session_id, _, _ = await get_access_info_direct(
+        request, db
     )
     
     # Create task
@@ -180,7 +181,7 @@ async def create_task(
         priority=task_data.priority,
         due_date=task_data.due_date,
         parent_task_id=task_data.parent_task_id,
-        metadata=task_data.metadata,
+        task_metadata=task_data.task_metadata,
         created_by=current_user.id,
         created_via_device_id=device_id,
         created_via_method=access_method,
@@ -204,7 +205,7 @@ async def create_task(
     await log_activity(
         db=db,
         user_id=current_user.id,
-        action_type=ActionType.TASK_CREATE,
+        action_type=ActionType.TASK_CREATE.value,
         resource_type=ResourceType.TASK,
         resource_id=task.id,
         device_id=device_id,
@@ -217,6 +218,15 @@ async def create_task(
     
     await db.commit()
     await db.refresh(task)
+    
+    # Send WebSocket notification
+    await notifications.notify_task_created(
+        task=task,
+        workspace_id=workspace.id,
+        list_id=list_id,
+        created_by=current_user.id,
+        device_id=device_id
+    )
     
     # Build response
     response = TaskResponse.model_validate(task)
@@ -285,8 +295,8 @@ async def update_task(
     task = await get_task_with_permissions(task_id, current_user, db, "edit")
     
     # Get access info
-    access_method, device_id, session_id, _, _ = await get_access_info(
-        request, db=db
+    access_method, device_id, session_id, _, _ = await get_access_info_direct(
+        request, db
     )
     
     # Track modifications
@@ -374,8 +384,8 @@ async def update_task(
     if task_data.position is not None:
         task.position = task_data.position
     
-    if task_data.metadata is not None:
-        task.metadata = task_data.metadata
+    if task_data.task_metadata is not None:
+        task.task_metadata = task_data.task_metadata
     
     # Handle list move
     if task_data.list_id is not None and task_data.list_id != task.list_id:
@@ -391,7 +401,7 @@ async def update_task(
         await log_activity(
             db=db,
             user_id=current_user.id,
-            action_type=ActionType.TASK_MOVE,
+            action_type=ActionType.TASK_MOVE.value,
             resource_type=ResourceType.TASK,
             resource_id=task_id,
             device_id=device_id,
@@ -429,6 +439,26 @@ async def update_task(
     await db.commit()
     await db.refresh(task)
     
+    # Prepare changes for WebSocket notification
+    changes = {}
+    for mod in modifications:
+        changes[mod.field_name] = {
+            "old": mod.old_value,
+            "new": mod.new_value
+        }
+    
+    # Get workspace ID for notification
+    task_list = await db.get(TaskList, task.list_id)
+    if task_list and changes:
+        await notifications.notify_task_updated(
+            task=task,
+            workspace_id=task_list.workspace_id,
+            list_id=task.list_id,
+            updated_by=current_user.id,
+            device_id=device_id,
+            changes=changes
+        )
+    
     # Build response
     creator = await db.get(User, task.created_by)
     response = TaskResponse.model_validate(task)
@@ -451,15 +481,15 @@ async def delete_task(
     task.status = TaskStatus.ARCHIVED
     
     # Get access info
-    access_method, device_id, session_id, _, _ = await get_access_info(
-        request, db=db
+    access_method, device_id, session_id, _, _ = await get_access_info_direct(
+        request, db
     )
     
     # Log activity
     await log_activity(
         db=db,
         user_id=current_user.id,
-        action_type=ActionType.TASK_DELETE,
+        action_type=ActionType.TASK_DELETE.value,
         resource_type=ResourceType.TASK,
         resource_id=task_id,
         device_id=device_id,
@@ -470,6 +500,17 @@ async def delete_task(
     )
     
     await db.commit()
+    
+    # Get workspace ID for notification
+    task_list = await db.get(TaskList, task.list_id)
+    if task_list:
+        await notifications.notify_task_deleted(
+            task_id=task_id,
+            workspace_id=task_list.workspace_id,
+            list_id=task.list_id,
+            deleted_by=current_user.id,
+            device_id=device_id
+        )
     
     return {"message": "Task deleted successfully"}
 
@@ -514,8 +555,8 @@ async def add_task_comment(
     task = await get_task_with_permissions(task_id, current_user, db, "view")
     
     # Get access info
-    access_method, device_id, session_id, _, _ = await get_access_info(
-        request, db=db
+    access_method, device_id, session_id, _, _ = await get_access_info_direct(
+        request, db
     )
     
     # Create comment
@@ -532,7 +573,7 @@ async def add_task_comment(
     await log_activity(
         db=db,
         user_id=current_user.id,
-        action_type=ActionType.TASK_COMMENT,
+        action_type=ActionType.TASK_COMMENT.value,
         resource_type=ResourceType.COMMENT,
         resource_id=comment.id,
         device_id=device_id,
@@ -579,6 +620,95 @@ async def list_task_comments(
         comments.append(response)
     
     return comments
+
+
+@router.get("/lists/{list_id}/tasks", response_model=List[TaskResponse])
+async def get_list_tasks(
+    list_id: UUID,
+    current_user: User = Depends(get_current_user),
+    limit: int = Query(50, le=100),
+    offset: int = Query(0, ge=0),
+    status: Optional[List[TaskStatus]] = Query(None),
+    priority: Optional[List[TaskPriority]] = Query(None),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get tasks in a specific list"""
+    # Verify list exists and user has access
+    result = await db.execute(
+        select(TaskList).where(TaskList.id == list_id)
+    )
+    task_list = result.scalar_one_or_none()
+    
+    if not task_list:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="List not found"
+        )
+    
+    # Verify workspace access
+    workspace = await db.get(Workspace, task_list.workspace_id)
+    if not workspace or not workspace.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Workspace not found"
+        )
+    
+    # Check user permission
+    has_access = workspace.owner_id == current_user.id
+    if not has_access:
+        result = await db.execute(
+            select(WorkspaceMember).where(
+                WorkspaceMember.workspace_id == workspace.id,
+                WorkspaceMember.user_id == current_user.id
+            )
+        )
+        has_access = result.scalar_one_or_none() is not None
+    
+    if not has_access:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied to this list"
+        )
+    
+    # Build query
+    query = select(Task).where(Task.list_id == list_id)
+    
+    # Apply filters
+    if status:
+        query = query.where(Task.status.in_(status))
+    
+    if priority:
+        query = query.where(Task.priority.in_(priority))
+    
+    # Order and paginate
+    query = query.order_by(Task.position, Task.created_at.desc())
+    query = query.limit(limit).offset(offset)
+    
+    result = await db.execute(query)
+    tasks = result.scalars().all()
+    
+    # Build responses
+    responses = []
+    for task in tasks:
+        creator = await db.get(User, task.created_by)
+        response = TaskResponse.model_validate(task)
+        response.creator_name = creator.name if creator else None
+        
+        # Get assignments
+        result = await db.execute(
+            select(TaskAssignment, User)
+            .join(User, User.id == TaskAssignment.user_id)
+            .where(TaskAssignment.task_id == task.id)
+        )
+        assignments = result.all()
+        response.assigned_users = [
+            {"id": user.id, "name": user.name, "email": user.email}
+            for _, user in assignments
+        ]
+        
+        responses.append(response)
+    
+    return responses
 
 
 @router.post("/tasks/search", response_model=List[TaskResponse])

@@ -8,7 +8,7 @@ sleep 5
 echo "Running database migrations..."
 alembic upgrade head
 
-echo "Initializing database with admin user..."
+echo "Initializing database..."
 python scripts/init_db.py
 
 echo "Starting FastAPI server..."

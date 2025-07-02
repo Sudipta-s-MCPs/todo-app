@@ -32,6 +32,7 @@ class WorkspaceResponse(BaseModel):
     updated_at: datetime
     is_active: bool
     member_count: Optional[int] = 1
+    task_count: Optional[int] = 0
     
     class Config:
         from_attributes = True

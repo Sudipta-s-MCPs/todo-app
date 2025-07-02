@@ -1,0 +1,222 @@
+import { useState } from 'react';
+import {
+  Card,
+  CardContent,
+  Typography,
+  Box,
+  Chip,
+  IconButton,
+  Menu,
+  MenuItem,
+  Avatar,
+  AvatarGroup,
+  Tooltip,
+} from '@mui/material';
+import {
+  MoreVert as MoreIcon,
+  Schedule as ScheduleIcon,
+  Flag as FlagIcon,
+  Edit as EditIcon,
+  Delete as DeleteIcon,
+  CheckCircle as CheckCircleIcon,
+  RadioButtonUnchecked as UncheckedIcon,
+} from '@mui/icons-material';
+import { format, isToday, isTomorrow, isPast } from 'date-fns';
+
+import type { Task } from '../types';
+
+interface TaskCardProps {
+  task: Task;
+  onEdit: (task: Task) => void;
+  onDelete: (task: Task) => void;
+  onToggleStatus: (task: Task) => void;
+  onSelect?: (task: Task, selected: boolean) => void;
+  selected?: boolean;
+}
+
+export default function TaskCard({
+  task,
+  onEdit,
+  onDelete,
+  onToggleStatus,
+  onSelect,
+  selected = false,
+}: TaskCardProps) {
+  const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
+
+  const handleMenuOpen = (event: React.MouseEvent<HTMLElement>) => {
+    event.stopPropagation();
+    setAnchorEl(event.currentTarget);
+  };
+
+  const handleMenuClose = () => {
+    setAnchorEl(null);
+  };
+
+  const handleEdit = () => {
+    handleMenuClose();
+    onEdit(task);
+  };
+
+  const handleDelete = () => {
+    handleMenuClose();
+    onDelete(task);
+  };
+
+  const handleToggle = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onToggleStatus(task);
+  };
+
+  const getPriorityColor = (priority: string) => {
+    switch (priority) {
+      case 'high':
+        return 'error';
+      case 'medium':
+        return 'warning';
+      case 'low':
+      default:
+        return 'default';
+    }
+  };
+
+  const getStatusIcon = () => {
+    if (task.status === 'completed') {
+      return <CheckCircleIcon color="success" />;
+    }
+    return <UncheckedIcon />;
+  };
+
+  const formatDueDate = (date: string) => {
+    const dueDate = new Date(date);
+    if (isToday(dueDate)) return 'Today';
+    if (isTomorrow(dueDate)) return 'Tomorrow';
+    if (isPast(dueDate) && task.status !== 'completed') {
+      return `Overdue (${format(dueDate, 'MMM d')})`;
+    }
+    return format(dueDate, 'MMM d, yyyy');
+  };
+
+  const isOverdue = task.due_date && isPast(new Date(task.due_date)) && task.status !== 'completed';
+
+  return (
+    <Card
+      sx={{
+        mb: 1,
+        opacity: task.status === 'completed' ? 0.7 : 1,
+        border: selected ? '2px solid' : '1px solid',
+        borderColor: selected ? 'primary.main' : 'divider',
+        cursor: 'pointer',
+        '&:hover': {
+          boxShadow: 2,
+        },
+      }}
+      onClick={() => onSelect?.(task, !selected)}
+    >
+      <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+        <Box display="flex" alignItems="flex-start" gap={1}>
+          <IconButton
+            size="small"
+            onClick={handleToggle}
+            sx={{ mt: -0.5 }}
+          >
+            {getStatusIcon()}
+          </IconButton>
+
+          <Box flex={1}>
+            <Typography
+              variant="body1"
+              sx={{
+                textDecoration: task.status === 'completed' ? 'line-through' : 'none',
+                mb: 0.5,
+              }}
+            >
+              {task.title}
+            </Typography>
+
+            {task.description && (
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                {task.description}
+              </Typography>
+            )}
+
+            <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
+              {task.workspace && (
+                <Chip
+                  label={`${task.workspace.emoji || '📁'} ${task.workspace.name}`}
+                  size="small"
+                  variant="outlined"
+                />
+              )}
+
+              <Chip
+                icon={<FlagIcon />}
+                label={task.priority}
+                size="small"
+                color={getPriorityColor(task.priority)}
+                variant="outlined"
+              />
+
+              {task.due_date && (
+                <Chip
+                  icon={<ScheduleIcon />}
+                  label={formatDueDate(task.due_date)}
+                  size="small"
+                  color={isOverdue ? 'error' : 'default'}
+                  variant={isOverdue ? 'filled' : 'outlined'}
+                />
+              )}
+
+              {task.tags && task.tags.map((tag) => (
+                <Chip key={tag} label={tag} size="small" />
+              ))}
+            </Box>
+
+            {task.assigned_users && task.assigned_users.length > 0 && (
+              <Box mt={1}>
+                <AvatarGroup max={3} sx={{ justifyContent: 'flex-start' }}>
+                  {task.assigned_users.map((user) => (
+                    <Tooltip key={user.id} title={user.name}>
+                      <Avatar
+                        sx={{ width: 24, height: 24, fontSize: 12 }}
+                      >
+                        {user.name.charAt(0).toUpperCase()}
+                      </Avatar>
+                    </Tooltip>
+                  ))}
+                </AvatarGroup>
+              </Box>
+            )}
+          </Box>
+
+          <IconButton size="small" onClick={handleMenuOpen}>
+            <MoreIcon />
+          </IconButton>
+        </Box>
+
+        <Menu
+          anchorEl={anchorEl}
+          open={Boolean(anchorEl)}
+          onClose={handleMenuClose}
+          anchorOrigin={{
+            vertical: 'top',
+            horizontal: 'right',
+          }}
+          transformOrigin={{
+            vertical: 'top',
+            horizontal: 'right',
+          }}
+        >
+          <MenuItem onClick={handleEdit}>
+            <EditIcon fontSize="small" sx={{ mr: 1 }} />
+            Edit
+          </MenuItem>
+          <MenuItem onClick={handleDelete} sx={{ color: 'error.main' }}>
+            <DeleteIcon fontSize="small" sx={{ mr: 1 }} />
+            Delete
+          </MenuItem>
+        </Menu>
+      </CardContent>
+    </Card>
+  );
+}

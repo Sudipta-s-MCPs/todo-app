@@ -29,16 +29,10 @@ import { api } from '../services/api'
 
 interface MCPAgent {
   id: string
-  agent_id: string
-  client_info: {
-    name?: string
-    description?: string
-    version?: string
-  }
+  agent_identifier: string
   capabilities: string[]
   is_active: boolean
-  last_active_at: string | null
-  token_expires_at: string | null
+  last_heartbeat: string | null
   created_at: string
   user: {
     id: string
@@ -110,14 +104,14 @@ export default function MCPClients() {
   // Search is handled client-side for now
   const filteredAgents = agents.filter(
     (agent) =>
-      agent.agent_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      agent.client_info.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      agent.user.email.toLowerCase().includes(searchQuery.toLowerCase())
+      (agent.agent_identifier?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
+      (agent.user?.email?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
+      (agent.user?.full_name?.toLowerCase() || '').includes(searchQuery.toLowerCase())
   )
 
   const columns: GridColDef[] = [
     {
-      field: 'agent_id',
+      field: 'agent_identifier',
       headerName: 'Agent',
       width: 300,
       renderCell: (params: GridRenderCellParams) => (
@@ -125,27 +119,27 @@ export default function MCPClients() {
           <MemoryIcon sx={{ mr: 1, color: 'text.secondary' }} />
           <Box>
             <Typography variant="body2" fontFamily="monospace">
-              {params.row.agent_id}
+              {params.row.agent_identifier}
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              {params.row.client_info?.name || 'Unnamed Agent'}
+              MCP Agent
             </Typography>
           </Box>
         </Box>
       ),
     },
     {
-      field: 'client_info',
+      field: 'description',
       headerName: 'Description',
       flex: 1,
       renderCell: (params: GridRenderCellParams) => (
         <Box>
           <Typography variant="body2">
-            {params.row.client_info?.description || 'No description'}
+            MCP Agent for task management
           </Typography>
-          {params.row.client_info?.version && (
-            <Chip label={`v${params.row.client_info.version}`} size="small" sx={{ mt: 0.5 }} />
-          )}
+          <Typography variant="caption" color="text.secondary">
+            {params.row.capabilities?.length || 0} capabilities
+          </Typography>
         </Box>
       ),
     },
@@ -154,7 +148,7 @@ export default function MCPClients() {
       headerName: 'Status',
       width: 150,
       renderCell: (params: GridRenderCellParams) => {
-        const online = isAgentOnline(params.row.last_active_at)
+        const online = isAgentOnline(params.row.last_heartbeat)
         const active = params.row.is_active
         return (
           <Box display="flex" gap={0.5}>
@@ -190,25 +184,15 @@ export default function MCPClients() {
       ),
     },
     {
-      field: 'capabilities',
-      headerName: 'Capabilities',
-      width: 180,
-      renderCell: (params: GridRenderCellParams) => (
-        <Typography variant="body2">
-          {params.row.capabilities.length} capabilities
-        </Typography>
-      ),
-    },
-    {
-      field: 'last_active_at',
+      field: 'last_heartbeat',
       headerName: 'Last Active',
       width: 180,
       renderCell: (params: GridRenderCellParams) => (
         <Box display="flex" alignItems="center">
           <AccessTimeIcon sx={{ mr: 0.5, fontSize: 16, color: 'text.secondary' }} />
           <Typography variant="body2">
-            {params.row.last_active_at
-              ? format(new Date(params.row.last_active_at), 'PPp')
+            {params.row.last_heartbeat
+              ? format(new Date(params.row.last_heartbeat), 'PPp')
               : 'Never'}
           </Typography>
         </Box>
@@ -298,30 +282,19 @@ export default function MCPClients() {
             <Box>
               <TextField
                 margin="dense"
-                label="Agent ID"
+                label="Agent Identifier"
                 fullWidth
                 variant="outlined"
-                value={selectedAgent.agent_id}
+                value={selectedAgent.agent_identifier}
                 disabled
                 sx={{ mb: 2 }}
               />
               <TextField
                 margin="dense"
-                label="Client Name"
+                label="Capabilities"
                 fullWidth
                 variant="outlined"
-                value={selectedAgent.client_info?.name || 'Unnamed'}
-                disabled
-                sx={{ mb: 2 }}
-              />
-              <TextField
-                margin="dense"
-                label="Description"
-                fullWidth
-                variant="outlined"
-                multiline
-                rows={2}
-                value={selectedAgent.client_info?.description || 'No description'}
+                value={selectedAgent.capabilities.join(', ')}
                 disabled
                 sx={{ mb: 2 }}
               />
@@ -343,12 +316,10 @@ export default function MCPClients() {
                 ))}
               </Box>
               <Typography variant="subtitle2" gutterBottom>
-                Token Expires:
+                API Key Status:
               </Typography>
               <Typography variant="body2">
-                {selectedAgent.token_expires_at
-                  ? format(new Date(selectedAgent.token_expires_at), 'PPp')
-                  : 'No expiration'}
+                No expiration (MCP tokens are persistent)
               </Typography>
             </Box>
           ) : (

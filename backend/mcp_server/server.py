@@ -13,10 +13,7 @@ from fastmcp import FastMCP, Context
 from pydantic import BaseModel, Field
 
 # Initialize FastMCP server
-mcp = FastMCP(
-    name="Smart-ToDo MCP Server",
-    description="AI-powered task management with duplicate detection and smart organization"
-)
+mcp = FastMCP("Smart-ToDo MCP Server")
 
 # Configuration from environment
 API_KEY = os.environ.get("TODO_API_KEY", "")
@@ -614,5 +611,5 @@ Use the search and list tools to analyze my tasks."""
 
 
 if __name__ == "__main__":
-    # Run the MCP server
-    mcp.run()
+    # Run the MCP server with HTTP transport (recommended)
+    mcp.run(transport="http", host="0.0.0.0", port=5485)

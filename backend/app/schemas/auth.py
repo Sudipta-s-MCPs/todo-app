@@ -34,6 +34,14 @@ class Token(BaseModel):
     expires_in: int
 
 
+class LoginResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    user: 'UserInfo'
+
+
 class TokenRefresh(BaseModel):
     refresh_token: str
 
@@ -61,6 +69,9 @@ class DeviceInfo(BaseModel):
     is_active: bool
     last_used_at: datetime
     created_at: datetime
+    
+    class Config:
+        from_attributes = True
 
 
 class APIKeyCreate(BaseModel):

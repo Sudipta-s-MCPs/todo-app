@@ -3,7 +3,7 @@ Activity logging service
 Created: 2025-01-30 14:16:00 PST
 """
 
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 import logging
@@ -17,12 +17,12 @@ logger = logging.getLogger(__name__)
 async def log_activity(
     db: AsyncSession,
     user_id: UUID,
-    action_type: ActionType,
-    resource_type: Optional[ResourceType] = None,
+    action_type: Union[ActionType, str],
+    resource_type: Optional[Union[ResourceType, str]] = None,
     resource_id: Optional[UUID] = None,
     device_id: Optional[UUID] = None,
     session_id: Optional[UUID] = None,
-    access_method: AccessMethod = AccessMethod.OTHER,
+    access_method: Union[AccessMethod, str] = AccessMethod.OTHER,
     api_key_id: Optional[UUID] = None,
     mcp_agent_id: Optional[UUID] = None,
     ip_address: Optional[str] = None,
@@ -35,6 +35,22 @@ async def log_activity(
     Log user activity
     """
     try:
+        # Convert string values to lowercase if they're enums
+        if isinstance(action_type, str):
+            action_type = action_type.lower()
+        elif isinstance(action_type, ActionType):
+            action_type = action_type.value
+            
+        if isinstance(resource_type, str):
+            resource_type = resource_type.lower()
+        elif isinstance(resource_type, ResourceType):
+            resource_type = resource_type.value
+            
+        if isinstance(access_method, str):
+            access_method = access_method.lower()
+        elif isinstance(access_method, AccessMethod):
+            access_method = access_method.value
+        
         activity = ActivityLog(
             user_id=user_id,
             action_type=action_type,

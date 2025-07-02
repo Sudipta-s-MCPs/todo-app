@@ -20,7 +20,7 @@ class TaskCreate(BaseModel):
     due_date: Optional[datetime] = None
     parent_task_id: Optional[UUID] = None
     assigned_to: Optional[List[UUID]] = []
-    metadata: Optional[Dict[str, Any]] = {}
+    task_metadata: Optional[Dict[str, Any]] = {}
 
 
 class TaskUpdate(BaseModel):
@@ -31,7 +31,7 @@ class TaskUpdate(BaseModel):
     due_date: Optional[datetime] = None
     list_id: Optional[UUID] = None
     position: Optional[int] = None
-    metadata: Optional[Dict[str, Any]] = None
+    task_metadata: Optional[Dict[str, Any]] = None
 
 
 class TaskResponse(BaseModel):
@@ -52,7 +52,7 @@ class TaskResponse(BaseModel):
     parent_task_id: Optional[UUID]
     
     position: int
-    metadata: Dict[str, Any]
+    task_metadata: Dict[str, Any]
     
     created_at: datetime
     updated_at: datetime

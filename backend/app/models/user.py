@@ -43,7 +43,7 @@ class User(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     email = Column(String(255), unique=True, nullable=False, index=True)
     name = Column(String(255), nullable=False)
-    password_hash = Column(String(255), nullable=False)
+    password_hash = Column(String(255), nullable=True)  # Nullable for LDAP users
     avatar_url = Column(String(500), nullable=True)
     settings_json = Column(JSON, default=dict)
     
@@ -62,15 +62,20 @@ class User(Base):
     totp_secret = Column(String(32), nullable=True)
     two_factor_enabled = Column(Boolean, default=False)
     
+    # Authentication provider
+    auth_provider = Column(String(50), default="local")  # local, ldap, oauth
+    ldap_dn = Column(String(500), nullable=True)  # LDAP Distinguished Name
+    external_id = Column(String(500), nullable=True)  # External system ID
+    
     # Relationships
     devices = relationship("UserDevice", back_populates="user", cascade="all, delete-orphan")
     api_keys = relationship("APIKey", back_populates="user", cascade="all, delete-orphan")
     mcp_agents = relationship("MCPAgent", back_populates="user", cascade="all, delete-orphan")
     sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
     owned_workspaces = relationship("Workspace", back_populates="owner", cascade="all, delete-orphan")
-    workspace_memberships = relationship("WorkspaceMember", back_populates="user", cascade="all, delete-orphan")
+    workspace_memberships = relationship("WorkspaceMember", foreign_keys="WorkspaceMember.user_id", back_populates="user", cascade="all, delete-orphan")
     created_tasks = relationship("Task", foreign_keys="Task.created_by", back_populates="creator")
-    assigned_tasks = relationship("TaskAssignment", back_populates="user", cascade="all, delete-orphan")
+    assigned_tasks = relationship("TaskAssignment", foreign_keys="TaskAssignment.user_id", back_populates="user", cascade="all, delete-orphan")
     activities = relationship("ActivityLog", back_populates="user", cascade="all, delete-orphan")
 
 
@@ -97,9 +102,10 @@ class UserDevice(Base):
     user = relationship("User", back_populates="devices")
     sessions = relationship("UserSession", back_populates="device", cascade="all, delete-orphan")
     
-    __table_args__ = (
-        {"postgresql_partition_by": "LIST (user_id)"},
-    )
+    # Partitioning disabled due to PostgreSQL constraint requirements
+    # __table_args__ = (
+    #     {"postgresql_partition_by": "LIST (user_id)"},
+    # )
 
 
 class APIKey(Base):
@@ -155,7 +161,7 @@ class UserSession(Base):
     
     ip_address = Column(String(45), nullable=True)
     user_agent = Column(Text, nullable=True)
-    access_method = Column(SQLEnum(AccessMethod), nullable=False)
+    access_method = Column(String(50), nullable=False)
     
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     expires_at = Column(DateTime, nullable=False)

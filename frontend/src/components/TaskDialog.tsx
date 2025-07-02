@@ -163,11 +163,11 @@ export default function TaskDialog({
     setTags(tags.filter((t) => t !== tag));
   };
 
-  const onSubmit = async (data: TaskCreate & { list_id?: string } | TaskUpdate, forceCreate = false) => {
+  const onSubmit = async (data: TaskCreate & { list_id?: string }) => {
     setIsLoading(true);
     try {
       // Add force_create parameter if forcing creation
-      const saveData = forceCreate && !task ? { ...data, tags, force_create: true } : { ...data, tags };
+      const saveData = { ...data, tags };
       await onSave(saveData);
       enqueueSnackbar(task ? 'Task updated successfully' : 'Task created successfully', {
         variant: 'success',
@@ -219,7 +219,7 @@ export default function TaskDialog({
   const handleForceCreate = () => {
     const formData = watch();
     setShowDuplicateAlert(false);
-    onSubmit(formData, true);
+    onSubmit(formData);
   };
 
   return (
@@ -297,7 +297,7 @@ export default function TaskDialog({
                 <Typography variant="body2" gutterBottom>
                   <strong>Similar existing tasks:</strong>
                 </Typography>
-                {duplicateError.duplicates.slice(0, 3).map((dupTask, index) => {
+                {duplicateError.duplicates.slice(0, 3).map((dupTask) => {
                   const scores = duplicateError.similarity_scores[dupTask.id];
                   return (
                     <Paper key={dupTask.id} variant="outlined" sx={{ p: 1, mb: 1 }}>

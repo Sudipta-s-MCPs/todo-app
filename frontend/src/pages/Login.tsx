@@ -19,13 +19,13 @@ import {
   VisibilityOff,
   Email,
   Lock,
-  CheckCircle,
 } from '@mui/icons-material';
 import { useSnackbar } from 'notistack';
 
 import { useAuthStore } from '../store/authStore';
 import { authService } from '../services/authService';
 import type { LoginCredentials } from '../types';
+import Logo from '../components/Logo';
 
 export default function Login() {
   const navigate = useNavigate();
@@ -79,9 +79,9 @@ export default function Login() {
           }}
         >
           <Box sx={{ textAlign: 'center', mb: 4 }}>
-            <CheckCircle sx={{ fontSize: 56, color: 'primary.main', mb: 2 }} />
+            <Logo size="large" textVariant="h4" sx={{ mb: 2, justifyContent: 'center' }} />
             <Typography component="h1" variant="h4" gutterBottom>
-              Welcome to Smart ToDo
+              Welcome Back
             </Typography>
             <Typography variant="body2" color="text.secondary">
               Sign in to manage your tasks

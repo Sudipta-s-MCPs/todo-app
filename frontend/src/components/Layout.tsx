@@ -35,6 +35,7 @@ import {
 
 import { useAuthStore } from '../store/authStore';
 import { authService } from '../services/authService';
+import Logo from './Logo';
 
 const drawerWidth = 240;
 
@@ -78,9 +79,7 @@ export default function Layout() {
   const drawer = (
     <Box>
       <Toolbar>
-        <Typography variant="h6" noWrap component="div" sx={{ flexGrow: 1 }}>
-          Smart ToDo
-        </Typography>
+        <Logo size="small" textVariant="h6" sx={{ flexGrow: 1 }} />
         {isMobile && (
           <IconButton onClick={handleDrawerToggle}>
             <ChevronLeftIcon />

@@ -20,12 +20,12 @@ import {
   Email,
   Lock,
   Person,
-  AppRegistration,
 } from '@mui/icons-material';
 import { useSnackbar } from 'notistack';
 
 import { authService } from '../services/authService';
 import type { RegisterCredentials } from '../types';
+import Logo from '../components/Logo';
 
 interface RegisterForm extends RegisterCredentials {
   confirmPassword: string;
@@ -94,7 +94,7 @@ export default function Register() {
           }}
         >
           <Box sx={{ textAlign: 'center', mb: 4 }}>
-            <AppRegistration sx={{ fontSize: 56, color: 'primary.main', mb: 2 }} />
+            <Logo size="large" textVariant="h4" sx={{ mb: 2, justifyContent: 'center' }} />
             <Typography component="h1" variant="h4" gutterBottom>
               Create Account
             </Typography>

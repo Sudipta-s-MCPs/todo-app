@@ -77,6 +77,7 @@ class User(Base):
     created_tasks = relationship("Task", foreign_keys="Task.created_by", back_populates="creator")
     assigned_tasks = relationship("TaskAssignment", foreign_keys="TaskAssignment.user_id", back_populates="user", cascade="all, delete-orphan")
     activities = relationship("ActivityLog", back_populates="user", cascade="all, delete-orphan")
+    chat_messages = relationship("ChatMessage", back_populates="user", cascade="all, delete-orphan")
 
 
 class UserDevice(Base):

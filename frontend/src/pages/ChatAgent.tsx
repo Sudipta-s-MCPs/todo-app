@@ -4,41 +4,29 @@ import {
   Paper,
   Typography,
   IconButton,
-  Drawer,
-  List,
-  ListItem,
-  ListItemText,
-  ListItemIcon,
-  Divider,
   Chip,
   Tooltip,
   AppBar,
   Toolbar,
+  Divider,
   useTheme,
   useMediaQuery,
   CircularProgress,
   Alert,
 } from '@mui/material';
 import {
-  Menu as MenuIcon,
   SmartToy as AIIcon,
-  History as HistoryIcon,
-  Delete as DeleteIcon,
   Close as CloseIcon,
   Task as TaskIcon,
-  Add as AddIcon,
-  Search as SearchIcon,
   Help as HelpIcon,
 } from '@mui/icons-material';
-import { formatDistanceToNow } from 'date-fns';
 import { useSnackbar } from 'notistack';
 
-import Layout from '../components/Layout';
 import ChatMessage from '../components/ChatMessage';
 import ChatInput from '../components/ChatInput';
 import TaskPreview from '../components/TaskPreview';
 import { chatService } from '../services/chatService';
-import type { ChatMessage as ChatMessageType, ChatConversation, Task } from '../types';
+import type { ChatMessage as ChatMessageType, Task } from '../types';
 
 export default function ChatAgent() {
   const theme = useTheme();
@@ -46,10 +34,7 @@ export default function ChatAgent() {
   const { enqueueSnackbar } = useSnackbar();
   
   const [messages, setMessages] = useState<ChatMessageType[]>([]);
-  const [conversations, setConversations] = useState<ChatConversation[]>([]);
-  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(!isMobile);
   const [previewTasks, setPreviewTasks] = useState<Task[]>([]);
   const [aiUsageToday, setAiUsageToday] = useState({ used: 0, limit: 50 });
   
@@ -57,7 +42,7 @@ export default function ChatAgent() {
   const chatContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    loadConversations();
+    loadChatHistory();
     loadAiUsage();
     // Show welcome message
     if (messages.length === 0) {
@@ -79,13 +64,35 @@ export default function ChatAgent() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  const loadConversations = async () => {
+  const loadChatHistory = async () => {
     try {
-      const data = await chatService.getConversations();
-      setConversations(data);
+      const conversations = await chatService.getConversations();
+      if (conversations.length > 0) {
+        // Load messages from the single conversation
+        const messages = await chatService.getConversationMessages(conversations[0].id);
+        if (messages.length > 0) {
+          setMessages(messages);
+        } else {
+          // Show welcome message if no history
+          showWelcomeMessage();
+        }
+      } else {
+        showWelcomeMessage();
+      }
     } catch (error) {
-      console.error('Failed to load conversations:', error);
+      console.error('Failed to load chat history:', error);
+      showWelcomeMessage();
     }
+  };
+  
+  const showWelcomeMessage = () => {
+    setMessages([{
+      id: 'welcome',
+      content: "👋 Hi! I'm your AI task assistant. I can help you:\n\n• Create tasks from natural language\n• Find and update existing tasks\n• Schedule and organize your work\n• Answer questions about your tasks\n\nTry saying something like 'Schedule a meeting with John next Tuesday' or 'What tasks are due this week?'",
+      sender: 'assistant',
+      timestamp: new Date().toISOString(),
+      metadata: { type: 'welcome' }
+    }]);
   };
 
   const loadAiUsage = async () => {
@@ -112,16 +119,10 @@ export default function ChatAgent() {
 
     try {
       // Send to backend
-      const response = await chatService.sendMessage(content, currentConversationId);
+      const response = await chatService.sendMessage(content, null);
       
       // Add assistant response
       setMessages(prev => [...prev, response.message]);
-      
-      // Update conversation ID if new
-      if (response.conversationId && !currentConversationId) {
-        setCurrentConversationId(response.conversationId);
-        loadConversations();
-      }
       
       // Update preview tasks if any
       if (response.tasks && response.tasks.length > 0) {
@@ -153,92 +154,7 @@ export default function ChatAgent() {
     }
   };
 
-  const handleSelectConversation = async (conversation: ChatConversation) => {
-    try {
-      setCurrentConversationId(conversation.id);
-      const messages = await chatService.getConversationMessages(conversation.id);
-      setMessages(messages);
-      setPreviewTasks([]);
-    } catch (error) {
-      enqueueSnackbar('Failed to load conversation', { variant: 'error' });
-    }
-  };
 
-  const handleNewConversation = () => {
-    setCurrentConversationId(null);
-    setMessages([{
-      id: 'new-welcome',
-      content: "Starting a new conversation. How can I help you with your tasks?",
-      sender: 'assistant',
-      timestamp: new Date().toISOString(),
-    }]);
-    setPreviewTasks([]);
-  };
-
-  const handleDeleteConversation = async (conversationId: string) => {
-    if (!window.confirm('Delete this conversation?')) return;
-    
-    try {
-      await chatService.deleteConversation(conversationId);
-      if (currentConversationId === conversationId) {
-        handleNewConversation();
-      }
-      loadConversations();
-      enqueueSnackbar('Conversation deleted', { variant: 'success' });
-    } catch (error) {
-      enqueueSnackbar('Failed to delete conversation', { variant: 'error' });
-    }
-  };
-
-  const drawerWidth = 280;
-
-  const historyDrawer = (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <Box sx={{ p: 2 }}>
-        <Typography variant="h6" gutterBottom>
-          Chat History
-        </Typography>
-        <Chip
-          icon={<AddIcon />}
-          label="New Chat"
-          onClick={handleNewConversation}
-          color="primary"
-          sx={{ width: '100%' }}
-        />
-      </Box>
-      <Divider />
-      <List sx={{ flex: 1, overflow: 'auto' }}>
-        {conversations.map((conv) => (
-          <ListItem
-            key={conv.id}
-            button
-            selected={currentConversationId === conv.id}
-            onClick={() => handleSelectConversation(conv)}
-            secondaryAction={
-              <IconButton
-                edge="end"
-                size="small"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleDeleteConversation(conv.id);
-                }}
-              >
-                <DeleteIcon />
-              </IconButton>
-            }
-          >
-            <ListItemIcon>
-              <HistoryIcon />
-            </ListItemIcon>
-            <ListItemText
-              primary={conv.title || 'Untitled Chat'}
-              secondary={formatDistanceToNow(new Date(conv.created_at), { addSuffix: true })}
-            />
-          </ListItem>
-        ))}
-      </List>
-    </Box>
-  );
 
   const commandHelp = [
     { command: '/today', description: 'Show today\'s tasks' },
@@ -248,40 +164,12 @@ export default function ChatAgent() {
   ];
 
   return (
-    <Layout>
-      <Box sx={{ display: 'flex', height: 'calc(100vh - 64px)' }}>
-        {/* History Drawer */}
-        <Drawer
-          variant={isMobile ? 'temporary' : 'persistent'}
-          open={historyOpen}
-          onClose={() => setHistoryOpen(false)}
-          sx={{
-            width: drawerWidth,
-            flexShrink: 0,
-            '& .MuiDrawer-paper': {
-              width: drawerWidth,
-              position: 'relative',
-              height: '100%',
-            },
-          }}
-        >
-          {historyDrawer}
-        </Drawer>
-
-        {/* Main Chat Area */}
-        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+    <Box sx={{ display: 'flex', height: 'calc(100vh - 64px)' }}>
+      {/* Main Chat Area */}
+      <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
           {/* Chat Header */}
           <AppBar position="static" color="default" elevation={1}>
             <Toolbar variant="dense">
-              {isMobile && (
-                <IconButton
-                  edge="start"
-                  onClick={() => setHistoryOpen(true)}
-                  sx={{ mr: 2 }}
-                >
-                  <MenuIcon />
-                </IconButton>
-              )}
               <AIIcon sx={{ mr: 1 }} />
               <Typography variant="h6" sx={{ flexGrow: 1 }}>
                 AI Task Assistant
@@ -380,6 +268,5 @@ export default function ChatAgent() {
           </Paper>
         )}
       </Box>
-    </Layout>
   );
 }

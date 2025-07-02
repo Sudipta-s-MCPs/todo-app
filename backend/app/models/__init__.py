@@ -18,6 +18,9 @@ from app.models.activity import (
 from app.models.settings import (
     SystemSetting, SettingCategory
 )
+from app.models.chat import (
+    ChatMessage
+)
 
 __all__ = [
     # User models
@@ -37,4 +40,7 @@ __all__ = [
     
     # Settings models
     "SystemSetting", "SettingCategory",
+    
+    # Chat models
+    "ChatMessage",
 ]

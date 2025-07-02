@@ -19,7 +19,6 @@ import {
   Flag as PriorityIcon,
   Schedule as DueIcon,
   Folder as WorkspaceIcon,
-  List as ListIcon,
 } from '@mui/icons-material';
 import { format } from 'date-fns';
 import { useSnackbar } from 'notistack';

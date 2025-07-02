@@ -15,10 +15,10 @@ import {
 import {
   Visibility,
   VisibilityOff,
-  CheckCircle as CheckCircleIcon,
 } from '@mui/icons-material'
 import { useAuthStore } from '../store/authStore'
 import { api } from '../services/api'
+import Logo from '../components/Logo'
 
 export default function Login() {
   const navigate = useNavigate()
@@ -72,10 +72,7 @@ export default function Login() {
         <Card sx={{ width: '100%', mt: 3 }}>
           <CardContent sx={{ p: 4 }}>
             <Box sx={{ textAlign: 'center', mb: 3 }}>
-              <CheckCircleIcon sx={{ fontSize: 48, color: 'primary.main', mb: 2 }} />
-              <Typography component="h1" variant="h5">
-                Smart-ToDo Admin
-              </Typography>
+              <Logo size="large" textVariant="h5" sx={{ mb: 2, justifyContent: 'center' }} />
               <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
                 Sign in to manage your Smart-ToDo application
               </Typography>

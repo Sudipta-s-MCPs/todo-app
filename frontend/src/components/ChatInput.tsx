@@ -1,4 +1,4 @@
-import { useState, useRef, KeyboardEvent } from 'react';
+import { useState, useRef, type KeyboardEvent } from 'react';
 import {
   Box,
   TextField,
@@ -11,12 +11,9 @@ import {
   ListItemIcon,
   Typography,
   Chip,
-  Divider,
 } from '@mui/material';
 import {
   Send as SendIcon,
-  Mic as MicIcon,
-  AttachFile as AttachIcon,
   Help as HelpIcon,
   Today as TodayIcon,
   Add as AddIcon,

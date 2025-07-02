@@ -26,18 +26,16 @@ import {
   Send as SendIcon,
   Title as TitleIcon,
   Folder as FolderIcon,
-  List as ListIcon,
   Flag as PriorityIcon,
   Event as DateIcon,
   ExpandMore as ExpandIcon,
   ExpandLess as CollapseIcon,
   Edit as EditIcon,
   Check as CheckIcon,
-  Close as CloseIcon,
 } from '@mui/icons-material';
 import { useSnackbar } from 'notistack';
 
-import type { Workspace, List as ListType, TaskCreate } from '../types';
+import type { Workspace, TaskCreate } from '../types';
 import { taskService } from '../services/taskService';
 
 interface SmartTaskInputProps {
@@ -67,7 +65,6 @@ export default function SmartTaskInput({
   onClose,
   onTaskCreated,
   workspaces,
-  defaultWorkspaceId,
 }: SmartTaskInputProps) {
   const { enqueueSnackbar } = useSnackbar();
   const [naturalText, setNaturalText] = useState('');

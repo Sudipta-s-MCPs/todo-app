@@ -174,7 +174,7 @@ export default function TaskCard({
               ))}
               
               {/* Attachment and Comment indicators */}
-              {task.attachment_count > 0 && (
+              {task.attachment_count && task.attachment_count > 0 && (
                 <Chip
                   icon={<AttachmentIcon />}
                   label={task.attachment_count}
@@ -183,7 +183,7 @@ export default function TaskCard({
                 />
               )}
               
-              {task.comment_count > 0 && (
+              {task.comment_count && task.comment_count > 0 && (
                 <Chip
                   icon={<CommentIcon />}
                   label={task.comment_count}

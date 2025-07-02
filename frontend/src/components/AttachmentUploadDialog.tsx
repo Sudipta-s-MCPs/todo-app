@@ -20,7 +20,6 @@ import {
 } from '@mui/material';
 import {
   CloudUpload as UploadIcon,
-  Close as CloseIcon,
   CheckCircle as SuccessIcon,
   Error as ErrorIcon,
   Delete as DeleteIcon,

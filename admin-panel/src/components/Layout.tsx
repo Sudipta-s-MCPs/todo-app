@@ -30,6 +30,7 @@ import {
   AccountCircle as AccountIcon,
 } from '@mui/icons-material'
 import { useAuthStore } from '../store/authStore'
+import Logo from './Logo'
 
 const drawerWidth = 240
 
@@ -73,9 +74,7 @@ export default function Layout({ children }: LayoutProps) {
   const drawer = (
     <div>
       <Toolbar>
-        <Typography variant="h6" noWrap component="div">
-          Smart-ToDo Admin
-        </Typography>
+        <Logo size="small" textVariant="h6" sx={{ flexGrow: 1 }} />
       </Toolbar>
       <Divider />
       <List>

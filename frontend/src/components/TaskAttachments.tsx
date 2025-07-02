@@ -159,7 +159,6 @@ export default function TaskAttachments({ taskId, onAttachmentsChange }: TaskAtt
     );
   }
 
-  const FileIconComponent = getFileIcon;
 
   return (
     <Box>

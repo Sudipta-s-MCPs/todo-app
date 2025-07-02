@@ -136,6 +136,16 @@ class Settings(BaseSettings):
     MAX_TASKS_PER_LIST: int = Field(default=1000)
     MAX_DEVICES_PER_USER: int = Field(default=10)
     
+    # AI Configuration
+    GROQ_API_KEY: Optional[str] = Field(default=None)
+    GROQ_MODEL: str = Field(default="llama-3.1-8b-instant")
+    AI_DAILY_TOKEN_LIMIT: int = Field(default=20000)
+    AI_USER_MONTHLY_TOKEN_LIMIT: int = Field(default=50000)
+    AI_TEMPERATURE: float = Field(default=0.3)
+    AI_MAX_TOKENS: int = Field(default=500)
+    AI_CACHE_TTL: int = Field(default=86400)
+    USER_MONTHLY_TOKEN_LIMIT: int = Field(default=50000)  # Alias for compatibility
+    
     # Monitoring
     SENTRY_DSN: Optional[str] = Field(default=None)
     LOG_LEVEL: str = Field(default="INFO")

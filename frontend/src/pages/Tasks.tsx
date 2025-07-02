@@ -7,7 +7,6 @@ import {
   TextField,
   InputAdornment,
   IconButton,
-  Fab,
   FormControl,
   Select,
   MenuItem,
@@ -382,7 +381,7 @@ export default function Tasks() {
       <SmartTaskInput
         open={smartTaskDialogOpen}
         onClose={() => setSmartTaskDialogOpen(false)}
-        onTaskCreated={(task) => {
+        onTaskCreated={() => {
           queryClient.invalidateQueries({ queryKey: ['tasks'] });
           queryClient.invalidateQueries({ queryKey: ['stats'] });
           enqueueSnackbar('Task created successfully!', { variant: 'success' });

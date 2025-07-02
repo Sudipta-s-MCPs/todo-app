@@ -6,7 +6,6 @@ import {
   Task as TaskIcon,
   CheckCircle as SuccessIcon,
   Error as ErrorIcon,
-  Schedule as ScheduleIcon,
 } from '@mui/icons-material';
 import { format } from 'date-fns';
 import { useSnackbar } from 'notistack';
@@ -45,7 +44,7 @@ export default function ChatMessage({ message, onTaskClick }: ChatMessageProps) 
             const taskMatch = part.match(/\[task:(\w+)\]/);
             if (taskMatch) {
               const taskId = taskMatch[1];
-              const task = message.metadata.tasks.find((t: Task) => t.id === taskId);
+              const task = message.metadata?.tasks?.find((t: Task) => t.id === taskId);
               if (task) {
                 return (
                   <Chip

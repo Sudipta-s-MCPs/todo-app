@@ -43,17 +43,49 @@ class LDAPService:
         self.server = None
         self.bind_connection = None
         self.executor = ThreadPoolExecutor(max_workers=5)
+        # Dynamic configuration from database
+        self.ldap_enabled = settings.LDAP_ENABLED
+        self.ldap_server = settings.LDAP_SERVER
+        self.ldap_port = settings.LDAP_PORT
+        self.ldap_use_ssl = settings.LDAP_USE_SSL
+        self.ldap_start_tls = settings.LDAP_START_TLS
+        self.ldap_bind_dn = settings.LDAP_BIND_DN
+        self.ldap_bind_password = settings.LDAP_BIND_PASSWORD
+        self.ldap_base_dn = settings.LDAP_BASE_DN
+        self.ldap_user_search_base = settings.LDAP_USER_SEARCH_BASE
+        self.ldap_user_filter = settings.LDAP_USER_FILTER
+        self.ldap_user_attr_email = settings.LDAP_USER_ATTR_EMAIL
+        self.ldap_user_attr_name = settings.LDAP_USER_ATTR_NAME
+        self.ldap_user_attr_uid = settings.LDAP_USER_ATTR_UID
+        self._initialize_server()
+    
+    def update_config(self, config_dict: Dict[str, Any]):
+        """Update LDAP configuration from database settings"""
+        self.ldap_enabled = config_dict.get('ldap_enabled', self.ldap_enabled)
+        self.ldap_server = config_dict.get('ldap_server', self.ldap_server)
+        self.ldap_port = config_dict.get('ldap_port', self.ldap_port)
+        self.ldap_use_ssl = config_dict.get('ldap_use_ssl', self.ldap_use_ssl)
+        self.ldap_start_tls = config_dict.get('ldap_start_tls', self.ldap_start_tls)
+        self.ldap_bind_dn = config_dict.get('ldap_bind_dn', self.ldap_bind_dn)
+        self.ldap_bind_password = config_dict.get('ldap_bind_password', self.ldap_bind_password)
+        self.ldap_base_dn = config_dict.get('ldap_base_dn', self.ldap_base_dn)
+        self.ldap_user_search_base = config_dict.get('ldap_user_search_base', self.ldap_user_search_base)
+        self.ldap_user_filter = config_dict.get('ldap_user_filter', self.ldap_user_filter)
+        self.ldap_user_attr_email = config_dict.get('ldap_user_attr_email', self.ldap_user_attr_email)
+        self.ldap_user_attr_name = config_dict.get('ldap_user_attr_name', self.ldap_user_attr_name)
+        self.ldap_user_attr_uid = config_dict.get('ldap_user_attr_uid', self.ldap_user_attr_uid)
+        # Reinitialize server with new config
         self._initialize_server()
     
     def _initialize_server(self):
         """Initialize LDAP server connection"""
-        if not settings.LDAP_ENABLED:
+        if not self.ldap_enabled:
             return
         
         try:
             # Create server object with TLS configuration
             import ssl
-            if not settings.LDAP_USE_SSL:
+            if not self.ldap_use_ssl:
                 # For START_TLS, configure TLS but don't use SSL
                 tls_config = Tls(
                     validate=ssl.CERT_NONE,
@@ -61,20 +93,20 @@ class LDAPService:
                     ciphers='ALL:@SECLEVEL=0'  # Allow all ciphers for compatibility
                 )
                 self.server = Server(
-                    host=settings.LDAP_SERVER,
-                    port=settings.LDAP_PORT,
+                    host=self.ldap_server,
+                    port=self.ldap_port,
                     use_ssl=False,
                     get_info=ALL,
                     tls=tls_config
                 )
             else:
                 self.server = Server(
-                    host=settings.LDAP_SERVER,
-                    port=settings.LDAP_PORT,
+                    host=self.ldap_server,
+                    port=self.ldap_port,
                     use_ssl=True,
                     get_info=ALL
                 )
-            logger.info(f"LDAP server initialized: {settings.LDAP_SERVER}:{settings.LDAP_PORT}")
+            logger.info(f"LDAP server initialized: {self.ldap_server}:{self.ldap_port}")
         except Exception as e:
             logger.error(f"Failed to initialize LDAP server: {e}")
             self.server = None
@@ -97,11 +129,11 @@ class LDAPService:
                     auto_referrals=False,
                     check_names=False
                 )
-            elif settings.LDAP_BIND_DN and settings.LDAP_BIND_PASSWORD:
+            elif self.ldap_bind_dn and self.ldap_bind_password:
                 conn = Connection(
                     self.server,
-                    user=settings.LDAP_BIND_DN,
-                    password=settings.LDAP_BIND_PASSWORD,
+                    user=self.ldap_bind_dn,
+                    password=self.ldap_bind_password,
                     authentication=SIMPLE,
                     auto_bind=False,
                     raise_exceptions=False,
@@ -120,7 +152,7 @@ class LDAPService:
             # Try to bind
             if not conn.bind():
                 # If bind fails due to TLS requirement, start TLS and retry
-                if settings.LDAP_START_TLS and conn.result.get('description') == 'confidentialityRequired':
+                if self.ldap_start_tls and conn.result.get('description') == 'confidentialityRequired':
                     logger.info("Starting TLS due to server requirement")
                     conn.start_tls()
                     if not conn.bind():
@@ -148,16 +180,16 @@ class LDAPService:
                 return LDAPAuthResult(success=False, error="Failed to connect to LDAP")
             
             # Search for user by email or uid
-            search_filter = f"(&{settings.LDAP_USER_FILTER}(|({settings.LDAP_USER_ATTR_EMAIL}={username})({settings.LDAP_USER_ATTR_UID}={username})))"
+            search_filter = f"(&{self.ldap_user_filter}(|({self.ldap_user_attr_email}={username})({self.ldap_user_attr_uid}={username})))"
             
             search_conn.search(
-                search_base=settings.LDAP_USER_SEARCH_BASE,
+                search_base=self.ldap_user_search_base,
                 search_filter=search_filter,
                 search_scope=SUBTREE,
                 attributes=[
-                    settings.LDAP_USER_ATTR_EMAIL,
-                    settings.LDAP_USER_ATTR_NAME,
-                    settings.LDAP_USER_ATTR_UID,
+                    self.ldap_user_attr_email,
+                    self.ldap_user_attr_name,
+                    self.ldap_user_attr_uid,
                     'cn'
                 ]
             )
@@ -171,9 +203,9 @@ class LDAPService:
             
             # Extract user info
             attributes = user_entry.entry_attributes_as_dict
-            email = attributes.get(settings.LDAP_USER_ATTR_EMAIL, [username])[0]
-            name = attributes.get(settings.LDAP_USER_ATTR_NAME, [username])[0]
-            uid = attributes.get(settings.LDAP_USER_ATTR_UID, [username])[0]
+            email = attributes.get(self.ldap_user_attr_email, [username])[0]
+            name = attributes.get(self.ldap_user_attr_name, [username])[0]
+            uid = attributes.get(self.ldap_user_attr_uid, [username])[0]
             
             search_conn.unbind()
             
@@ -205,7 +237,7 @@ class LDAPService:
     
     async def authenticate(self, username: str, password: str) -> LDAPAuthResult:
         """Authenticate user against LDAP (async wrapper)"""
-        if not settings.LDAP_ENABLED:
+        if not self.ldap_enabled:
             return LDAPAuthResult(success=False, error="LDAP authentication is disabled")
         
         # Run synchronous LDAP operation in thread pool
@@ -244,16 +276,16 @@ class LDAPService:
                 return None
             
             # Search for user
-            search_filter = f"(&{settings.LDAP_USER_FILTER}(|({settings.LDAP_USER_ATTR_EMAIL}={username})({settings.LDAP_USER_ATTR_UID}={username})))"
+            search_filter = f"(&{self.ldap_user_filter}(|({self.ldap_user_attr_email}={username})({self.ldap_user_attr_uid}={username})))"
             
             conn.search(
-                search_base=settings.LDAP_USER_SEARCH_BASE,
+                search_base=self.ldap_user_search_base,
                 search_filter=search_filter,
                 search_scope=SUBTREE,
                 attributes=[
-                    settings.LDAP_USER_ATTR_EMAIL,
-                    settings.LDAP_USER_ATTR_NAME,
-                    settings.LDAP_USER_ATTR_UID,
+                    self.ldap_user_attr_email,
+                    self.ldap_user_attr_name,
+                    self.ldap_user_attr_uid,
                     'cn',
                     'memberOf'
                 ]
@@ -267,9 +299,9 @@ class LDAPService:
             attributes = user_entry.entry_attributes_as_dict
             
             user_info = LDAPUserInfo(
-                uid=attributes.get(settings.LDAP_USER_ATTR_UID, [username])[0],
-                email=attributes.get(settings.LDAP_USER_ATTR_EMAIL, [username])[0],
-                name=attributes.get(settings.LDAP_USER_ATTR_NAME, [username])[0],
+                uid=attributes.get(self.ldap_user_attr_uid, [username])[0],
+                email=attributes.get(self.ldap_user_attr_email, [username])[0],
+                name=attributes.get(self.ldap_user_attr_name, [username])[0],
                 dn=user_entry.entry_dn,
                 attributes=attributes
             )
@@ -283,7 +315,7 @@ class LDAPService:
     
     async def get_user_info(self, username: str) -> Optional[LDAPUserInfo]:
         """Get user information from LDAP (async wrapper)"""
-        if not settings.LDAP_ENABLED:
+        if not self.ldap_enabled:
             return None
         
         loop = asyncio.get_event_loop()
@@ -304,16 +336,16 @@ class LDAPService:
                 return []
             
             # Build search filter
-            search_filter = f"(&{settings.LDAP_USER_FILTER}(|({settings.LDAP_USER_ATTR_EMAIL}=*{query}*)({settings.LDAP_USER_ATTR_NAME}=*{query}*)({settings.LDAP_USER_ATTR_UID}=*{query}*)))"
+            search_filter = f"(&{self.ldap_user_filter}(|({self.ldap_user_attr_email}=*{query}*)({self.ldap_user_attr_name}=*{query}*)({self.ldap_user_attr_uid}=*{query}*)))"
             
             conn.search(
-                search_base=settings.LDAP_USER_SEARCH_BASE,
+                search_base=self.ldap_user_search_base,
                 search_filter=search_filter,
                 search_scope=SUBTREE,
                 attributes=[
-                    settings.LDAP_USER_ATTR_EMAIL,
-                    settings.LDAP_USER_ATTR_NAME,
-                    settings.LDAP_USER_ATTR_UID
+                    self.ldap_user_attr_email,
+                    self.ldap_user_attr_name,
+                    self.ldap_user_attr_uid
                 ],
                 size_limit=50
             )
@@ -322,9 +354,9 @@ class LDAPService:
             for entry in conn.entries:
                 attributes = entry.entry_attributes_as_dict
                 users.append(LDAPUserInfo(
-                    uid=attributes.get(settings.LDAP_USER_ATTR_UID, [""])[0],
-                    email=attributes.get(settings.LDAP_USER_ATTR_EMAIL, [""])[0],
-                    name=attributes.get(settings.LDAP_USER_ATTR_NAME, [""])[0],
+                    uid=attributes.get(self.ldap_user_attr_uid, [""])[0],
+                    email=attributes.get(self.ldap_user_attr_email, [""])[0],
+                    name=attributes.get(self.ldap_user_attr_name, [""])[0],
                     dn=entry.entry_dn,
                     attributes=attributes
                 ))
@@ -338,7 +370,7 @@ class LDAPService:
     
     async def search_users(self, query: str) -> List[LDAPUserInfo]:
         """Search for users in LDAP (async wrapper)"""
-        if not settings.LDAP_ENABLED:
+        if not self.ldap_enabled:
             return []
         
         loop = asyncio.get_event_loop()
@@ -360,7 +392,7 @@ class LDAPService:
             
             # Try a simple search to verify connection
             conn.search(
-                search_base=settings.LDAP_BASE_DN,
+                search_base=self.ldap_base_dn,
                 search_filter="(objectClass=*)",
                 search_scope=SUBTREE,
                 size_limit=1
@@ -375,7 +407,7 @@ class LDAPService:
     
     async def test_connection(self) -> bool:
         """Test LDAP connection (async wrapper)"""
-        if not settings.LDAP_ENABLED:
+        if not self.ldap_enabled:
             return False
         
         loop = asyncio.get_event_loop()

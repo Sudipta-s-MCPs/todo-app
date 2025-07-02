@@ -15,6 +15,9 @@ from app.models.task import (
 from app.models.activity import (
     ActivityLog, ActionType, ResourceType
 )
+from app.models.settings import (
+    SystemSetting, SettingCategory
+)
 
 __all__ = [
     # User models
@@ -31,4 +34,7 @@ __all__ = [
     
     # Activity models
     "ActivityLog", "ActionType", "ResourceType",
+    
+    # Settings models
+    "SystemSetting", "SettingCategory",
 ]

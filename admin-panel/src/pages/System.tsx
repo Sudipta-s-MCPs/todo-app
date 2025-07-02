@@ -121,6 +121,7 @@ interface SystemConfig {
     mfa_enabled: boolean
     api_keys_enabled: boolean
     websockets_enabled: boolean
+    ldap_enabled: boolean
   }
   limits: {
     max_workspaces_per_user: number
@@ -131,12 +132,30 @@ interface SystemConfig {
   }
 }
 
+interface ServiceStatus {
+  enabled: boolean
+  connected: boolean
+  message: string
+  endpoint: string | null
+}
+
+interface ServicesStatus {
+  timestamp: string
+  services: {
+    ldap?: ServiceStatus
+    minio?: ServiceStatus
+    qdrant?: ServiceStatus
+    groq?: ServiceStatus
+  }
+}
+
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042']
 
 export default function System() {
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null)
   const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null)
   const [systemConfig, setSystemConfig] = useState<SystemConfig | null>(null)
+  const [servicesStatus, setServicesStatus] = useState<ServicesStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -150,15 +169,17 @@ export default function System() {
   const fetchSystemData = async () => {
     try {
       setError(null)
-      const [infoRes, healthRes, configRes] = await Promise.all([
+      const [infoRes, healthRes, configRes, servicesRes] = await Promise.all([
         api.get('/system/info'),
         api.get('/system/health'),
         api.get('/system/config'),
+        api.get('/system/services-status'),
       ])
       
       setSystemInfo(infoRes.data)
       setSystemHealth(healthRes.data)
       setSystemConfig(configRes.data)
+      setServicesStatus(servicesRes.data)
     } catch (error) {
       console.error('Failed to fetch system data:', error)
       setError('Failed to load system information')
@@ -289,6 +310,49 @@ export default function System() {
           ))}
         </Grid>
       </Paper>
+
+      {/* External Services Status */}
+      {servicesStatus && (
+        <Paper sx={{ p: 2, mb: 3 }}>
+          <Typography variant="h6" sx={{ mb: 2 }}>
+            External Services
+          </Typography>
+          <Grid container spacing={2}>
+            {Object.entries(servicesStatus.services).map(([serviceName, service]) => (
+              <Grid item xs={12} sm={6} md={3} key={serviceName}>
+                <Card variant="outlined">
+                  <CardContent sx={{ p: 2 }}>
+                    <Box display="flex" alignItems="center" mb={1}>
+                      {service.connected ? (
+                        <CheckIcon color="success" />
+                      ) : service.enabled ? (
+                        <ErrorIcon color="error" />
+                      ) : (
+                        <WarningIcon color="warning" />
+                      )}
+                      <Typography variant="subtitle1" sx={{ ml: 1, fontWeight: 'medium' }}>
+                        {serviceName.toUpperCase()}
+                      </Typography>
+                    </Box>
+                    <Typography 
+                      variant="caption" 
+                      color={service.connected ? 'success.main' : service.enabled ? 'error.main' : 'text.secondary'}
+                      display="block"
+                    >
+                      {service.message}
+                    </Typography>
+                    {service.endpoint && (
+                      <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
+                        {service.endpoint}
+                      </Typography>
+                    )}
+                  </CardContent>
+                </Card>
+              </Grid>
+            ))}
+          </Grid>
+        </Paper>
+      )}
 
       {/* System Overview */}
       <Grid container spacing={3} mb={3}>

@@ -126,11 +126,17 @@ export interface Task {
 
 export interface TaskAttachment {
   id: string;
+  task_id: string;
   filename: string;
   file_size: number;
   mime_type: string;
+  storage_path: string;
+  storage_etag?: string;
+  storage_version_id?: string;
   uploaded_by: string;
   uploaded_at: string;
+  download_url?: string;
+  uploader_name?: string;
 }
 
 export interface TaskComment {
@@ -192,6 +198,37 @@ export interface TaskFilter {
 export interface SortOptions {
   field: 'created_at' | 'updated_at' | 'due_date' | 'priority' | 'title';
   order: 'asc' | 'desc';
+}
+
+// Chat Types
+export interface ChatMessage {
+  id: string;
+  content: string;
+  sender: 'user' | 'assistant';
+  timestamp: string;
+  metadata?: {
+    type?: 'welcome' | 'error' | 'success' | 'task';
+    usedAI?: boolean;
+    confidence?: number;
+    tasks?: Task[];
+    action?: string;
+  };
+}
+
+export interface ChatConversation {
+  id: string;
+  title?: string;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+}
+
+export interface ChatResponse {
+  message: ChatMessage;
+  conversationId?: string;
+  tasks?: Task[];
+  action?: string;
+  usedAI: boolean;
 }
 
 // WebSocket Types

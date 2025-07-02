@@ -1,5 +1,5 @@
 import { api } from './api';
-import type { Task, TaskCreate, TaskUpdate } from '../types';
+import type { Task, TaskCreate, TaskUpdate, TaskAttachment } from '../types';
 
 export const taskService = {
   async getListTasks(
@@ -77,5 +77,48 @@ export const taskService = {
       description,
     });
     return response.data;
+  },
+
+  // Attachment methods
+  async uploadAttachment(
+    taskId: string,
+    file: File,
+    onProgress?: (progress: number) => void
+  ): Promise<TaskAttachment> {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await api.post<TaskAttachment>(
+      `/tasks/${taskId}/attachments`,
+      formData,
+      {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+        onUploadProgress: (progressEvent) => {
+          if (onProgress && progressEvent.total) {
+            const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            onProgress(progress);
+          }
+        },
+      }
+    );
+    return response.data;
+  },
+
+  async getAttachments(taskId: string): Promise<TaskAttachment[]> {
+    const response = await api.get<TaskAttachment[]>(`/tasks/${taskId}/attachments`);
+    return response.data;
+  },
+
+  async downloadAttachment(attachmentId: string): Promise<Blob> {
+    const response = await api.get(`/attachments/${attachmentId}/download`, {
+      responseType: 'blob',
+    });
+    return response.data;
+  },
+
+  async deleteAttachment(attachmentId: string): Promise<void> {
+    await api.delete(`/attachments/${attachmentId}`);
   },
 };

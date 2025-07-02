@@ -20,6 +20,8 @@ import {
   Delete as DeleteIcon,
   CheckCircle as CheckCircleIcon,
   RadioButtonUnchecked as UncheckedIcon,
+  AttachFile as AttachmentIcon,
+  Comment as CommentIcon,
 } from '@mui/icons-material';
 import { format, isToday, isTomorrow, isPast } from 'date-fns';
 
@@ -170,6 +172,25 @@ export default function TaskCard({
               {task.tags && task.tags.map((tag) => (
                 <Chip key={tag} label={tag} size="small" />
               ))}
+              
+              {/* Attachment and Comment indicators */}
+              {task.attachment_count > 0 && (
+                <Chip
+                  icon={<AttachmentIcon />}
+                  label={task.attachment_count}
+                  size="small"
+                  variant="outlined"
+                />
+              )}
+              
+              {task.comment_count > 0 && (
+                <Chip
+                  icon={<CommentIcon />}
+                  label={task.comment_count}
+                  size="small"
+                  variant="outlined"
+                />
+              )}
             </Box>
 
             {task.assigned_users && task.assigned_users.length > 0 && (

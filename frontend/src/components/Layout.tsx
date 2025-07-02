@@ -30,6 +30,7 @@ import {
   Notifications as NotificationsIcon,
   Settings as SettingsIcon,
   ChevronLeft as ChevronLeftIcon,
+  SmartToy as AIIcon,
 } from '@mui/icons-material';
 
 import { useAuthStore } from '../store/authStore';
@@ -39,6 +40,7 @@ const drawerWidth = 240;
 
 const menuItems = [
   { text: 'Dashboard', icon: <DashboardIcon />, path: '/dashboard' },
+  { text: 'AI Assistant', icon: <AIIcon />, path: '/chat', badge: 'NEW' },
   { text: 'Tasks', icon: <TaskIcon />, path: '/tasks' },
   { text: 'Workspaces', icon: <FolderIcon />, path: '/workspaces' },
 ];
@@ -97,6 +99,13 @@ export default function Layout() {
             >
               <ListItemIcon>{item.icon}</ListItemIcon>
               <ListItemText primary={item.text} />
+              {item.badge && (
+                <Badge
+                  badgeContent={item.badge}
+                  color="primary"
+                  sx={{ mr: 2 }}
+                />
+              )}
             </ListItemButton>
           </ListItem>
         ))}

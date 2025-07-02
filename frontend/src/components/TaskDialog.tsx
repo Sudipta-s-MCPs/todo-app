@@ -21,6 +21,9 @@ import {
   LinearProgress,
   Divider,
   Paper,
+  Tabs,
+  Tab,
+  Badge,
 } from '@mui/material';
 import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
 import { 
@@ -28,12 +31,15 @@ import {
   SmartToy as AIIcon,
   Update as UpdateIcon,
   Add as AddIcon,
+  AttachFile as AttachmentIcon,
+  Info as InfoIcon,
 } from '@mui/icons-material';
 import { useForm, Controller } from 'react-hook-form';
 import { useSnackbar } from 'notistack';
 
 import type { Task, TaskCreate, TaskUpdate, Workspace, List, DuplicateTaskError } from '../types';
 import { listService } from '../services/listService';
+import TaskAttachments from './TaskAttachments';
 
 interface TaskDialogProps {
   open: boolean;
@@ -61,6 +67,8 @@ export default function TaskDialog({
   const [loadingLists, setLoadingLists] = useState(false);
   const [duplicateError, setDuplicateError] = useState<DuplicateTaskError | null>(null);
   const [showDuplicateAlert, setShowDuplicateAlert] = useState(false);
+  const [tabValue, setTabValue] = useState(0);
+  const [attachmentCount, setAttachmentCount] = useState(task?.attachment_count || 0);
 
   const {
     control,
@@ -226,8 +234,24 @@ export default function TaskDialog({
           </Box>
         </DialogTitle>
         
+        {task && (
+          <Tabs value={tabValue} onChange={(_, value) => setTabValue(value)} centered>
+            <Tab icon={<InfoIcon />} label="Details" />
+            <Tab
+              icon={
+                <Badge badgeContent={attachmentCount} color="primary">
+                  <AttachmentIcon />
+                </Badge>
+              }
+              label="Attachments"
+            />
+          </Tabs>
+        )}
+        
         <DialogContent dividers>
-          <Stack spacing={3}>
+          {/* Tab Panel 0: Task Details */}
+          {(!task || tabValue === 0) && (
+            <Stack spacing={3}>
             {/* AI Duplicate Alert */}
             {showDuplicateAlert && duplicateError && (
               <Alert 
@@ -510,14 +534,25 @@ export default function TaskDialog({
                 ))}
               </Box>
             </Box>
-          </Stack>
+            </Stack>
+          )}
+          
+          {/* Tab Panel 1: Attachments */}
+          {task && tabValue === 1 && (
+            <TaskAttachments
+              taskId={task.id}
+              onAttachmentsChange={setAttachmentCount}
+            />
+          )}
         </DialogContent>
 
         <DialogActions>
           <Button onClick={onClose}>Cancel</Button>
-          <Button type="submit" variant="contained" disabled={isLoading}>
-            {task ? 'Update' : 'Create'}
-          </Button>
+          {(!task || tabValue === 0) && (
+            <Button type="submit" variant="contained" disabled={isLoading}>
+              {task ? 'Update' : 'Create'}
+            </Button>
+          )}
         </DialogActions>
       </form>
     </Dialog>

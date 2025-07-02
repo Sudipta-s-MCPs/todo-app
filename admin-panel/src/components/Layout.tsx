@@ -25,6 +25,7 @@ import {
   Memory as MemoryIcon,
   Token as TokenIcon,
   Settings as SettingsIcon,
+  Tune as TuneIcon,
   Logout as LogoutIcon,
   AccountCircle as AccountIcon,
 } from '@mui/icons-material'
@@ -41,6 +42,7 @@ const menuItems = [
   { text: 'Users', icon: <PeopleIcon />, path: '/users' },
   { text: 'MCP Clients', icon: <MemoryIcon />, path: '/mcp-clients' },
   { text: 'API Tokens', icon: <TokenIcon />, path: '/tokens' },
+  { text: 'Settings', icon: <TuneIcon />, path: '/settings' },
   { text: 'System', icon: <SettingsIcon />, path: '/system' },
 ]
 

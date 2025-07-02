@@ -7,64 +7,12 @@ services:
     ports:
       - "${BACKEND_PORT:-5482}:8000"
     environment:
-      # Environment
+      # Core Infrastructure - Must remain in env
       - ENVIRONMENT=${ENVIRONMENT}
-      
-      # Database
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
-      
-      # Security
       - SECRET_KEY=${SECRET_KEY}
       - ALGORITHM=${ALGORITHM}
-      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES}
-      - REFRESH_TOKEN_EXPIRE_DAYS=${REFRESH_TOKEN_EXPIRE_DAYS}
-      - MCP_TOKEN_EXPIRE_HOURS=${MCP_TOKEN_EXPIRE_HOURS}
-      
-      # Security Features
-      - ENABLE_RATE_LIMITING=${ENABLE_RATE_LIMITING}
-      - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE}
-      - RATE_LIMIT_PER_HOUR=${RATE_LIMIT_PER_HOUR}
-      - RATE_LIMIT_BURST=${RATE_LIMIT_BURST}
-      - ENABLE_REQUEST_VALIDATION=${ENABLE_REQUEST_VALIDATION}
-      - ENABLE_SECURITY_HEADERS=${ENABLE_SECURITY_HEADERS}
-      - ENABLE_AUDIT_LOGGING=${ENABLE_AUDIT_LOGGING}
-      
-      # IP Whitelist
-      - ADMIN_IP_WHITELIST=${ADMIN_IP_WHITELIST}
-      
-      # Feature Flags
-      - OAUTH_ENABLED=${OAUTH_ENABLED}
-      - MFA_ENABLED=${MFA_ENABLED}
-      - API_KEYS_ENABLED=${API_KEYS_ENABLED}
-      - WEBSOCKETS_ENABLED=${WEBSOCKETS_ENABLED}
-      
-      # User Limits
-      - MAX_WORKSPACES_PER_USER=${MAX_WORKSPACES_PER_USER}
-      - MAX_LISTS_PER_WORKSPACE=${MAX_LISTS_PER_WORKSPACE}
-      - MAX_TASKS_PER_LIST=${MAX_TASKS_PER_LIST}
-      - MAX_API_KEYS_PER_USER=${MAX_API_KEYS_PER_USER}
-      - MAX_DEVICES_PER_USER=${MAX_DEVICES_PER_USER}
-      
-      # LDAP Configuration
-      - LDAP_ENABLED=${LDAP_ENABLED}
-      - LDAP_SERVER=${LDAP_SERVER}
-      - LDAP_PORT=${LDAP_PORT}
-      - LDAP_USE_SSL=${LDAP_USE_SSL}
-      - LDAP_START_TLS=${LDAP_START_TLS}
-      - LDAP_BIND_DN=${LDAP_BIND_DN}
-      - LDAP_BIND_PASSWORD=${LDAP_BIND_PASSWORD}
-      - LDAP_BASE_DN=${LDAP_BASE_DN}
-      - LDAP_USER_DN_TEMPLATE=${LDAP_USER_DN_TEMPLATE}
-      - LDAP_USER_SEARCH_BASE=${LDAP_USER_SEARCH_BASE}
-      - LDAP_USER_FILTER=${LDAP_USER_FILTER}
-      - LDAP_USER_ATTR_EMAIL=${LDAP_USER_ATTR_EMAIL}
-      - LDAP_USER_ATTR_NAME=${LDAP_USER_ATTR_NAME}
-      - LDAP_USER_ATTR_UID=${LDAP_USER_ATTR_UID}
-      - LDAP_GROUP_SEARCH_BASE=${LDAP_GROUP_SEARCH_BASE}
-      - LDAP_GROUP_FILTER=${LDAP_GROUP_FILTER}
-      - LDAP_CONNECTION_TIMEOUT=${LDAP_CONNECTION_TIMEOUT}
-      - LDAP_AUTO_CREATE_USER=${LDAP_AUTO_CREATE_USER}
       
       # API Configuration
       - API_V1_PREFIX=${API_V1_PREFIX}
@@ -81,15 +29,10 @@ services:
       # Test Configuration
       - TEST_API_KEY=${TEST_API_KEY}
       
-      # External Services
-      - OAUTH_GOOGLE_CLIENT_ID=${OAUTH_GOOGLE_CLIENT_ID}
-      - OAUTH_GOOGLE_CLIENT_SECRET=${OAUTH_GOOGLE_CLIENT_SECRET}
-      - OAUTH_GITHUB_CLIENT_ID=${OAUTH_GITHUB_CLIENT_ID}
-      - OAUTH_GITHUB_CLIENT_SECRET=${OAUTH_GITHUB_CLIENT_SECRET}
-      
       # Monitoring
-      - SENTRY_DSN=${SENTRY_DSN}
       - LOG_LEVEL=${LOG_LEVEL}
+      
+      # Note: All other settings are now managed via admin panel at /settings
     volumes:
       - ./backend:/app
     networks:
@@ -148,52 +91,7 @@ services:
       - smart-todo-network
     depends_on:
       - backend
-    profiles:
-      - test
-
-  # Local PostgreSQL for development
-  # In production on Synology NAS, this service won't be used
-  postgres:
-    image: postgres:15-alpine
-    container_name: smart-todo-postgres
-    ports:
-      - "15432:5432"
-    environment:
-      POSTGRES_USER: sd_todo_app_user
-      POSTGRES_PASSWORD: AAqLX5r0lzm53hgQu48XIClw
-      POSTGRES_DB: sd_todo_app_db
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    networks:
-      - smart-todo-network
     restart: unless-stopped
-    profiles:
-      - local
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U sd_todo_app_user -d sd_todo_app_db"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Local Redis cache for development
-  # In production on Synology NAS, this service won't be used
-  redis-cache:
-    image: redis:7-alpine
-    container_name: smart-todo-redis
-    ports:
-      - "16379:6379"
-    volumes:
-      - redis-data:/data
-    networks:
-      - smart-todo-network
-    restart: unless-stopped
-    profiles:
-      - local
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
   mcp-server:
     build:
@@ -219,7 +117,3 @@ services:
 networks:
   smart-todo-network:
     driver: bridge
-
-volumes:
-  postgres-data:
-  redis-data:

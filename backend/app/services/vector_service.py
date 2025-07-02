@@ -9,20 +9,32 @@ from typing import List, Dict, Any, Optional, Tuple
 from uuid import UUID
 from datetime import datetime
 import asyncio
-import numpy as np
-
-from qdrant_client import QdrantClient
-from qdrant_client.models import (
-    Distance, VectorParams, PointStruct, 
-    Filter, FieldCondition, MatchValue,
-    SearchRequest, UpdateStatus
-)
-from sentence_transformers import SentenceTransformer
 
 from app.utils.logging import get_logger
 from app.services.cache import get_redis_client
 
 logger = get_logger(__name__)
+
+# Try to import optional dependencies
+try:
+    import numpy as np
+    from qdrant_client import QdrantClient
+    from qdrant_client.models import (
+        Distance, VectorParams, PointStruct, 
+        Filter, FieldCondition, MatchValue,
+        SearchRequest, UpdateStatus
+    )
+    QDRANT_AVAILABLE = True
+except ImportError:
+    QDRANT_AVAILABLE = False
+    logger.warning("Qdrant dependencies not available - vector search disabled")
+
+try:
+    from sentence_transformers import SentenceTransformer
+    SENTENCE_TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    SENTENCE_TRANSFORMERS_AVAILABLE = False
+    logger.warning("Sentence transformers not available - vector embeddings disabled")
 
 
 class VectorService:
@@ -35,20 +47,33 @@ class VectorService:
         self.collection_name = os.getenv("QDRANT_COLLECTION_NAME", "smart_todo_tasks")
         self.embedding_model_name = os.getenv("QDRANT_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
         
-        # Initialize Qdrant client
-        self.client = QdrantClient(
-            host=self.host,
-            port=self.port,
-            api_key=self.api_key,
-            https=False  # Set to True if using HTTPS
-        )
+        # Check if dependencies are available
+        if not QDRANT_AVAILABLE or not SENTENCE_TRANSFORMERS_AVAILABLE:
+            self.client = None
+            self.embedding_model = None
+            self.vector_size = 384  # Default size for MiniLM
+            logger.warning("Vector service disabled due to missing dependencies")
+            return
         
-        # Initialize embedding model
-        self.embedding_model = SentenceTransformer(self.embedding_model_name)
-        self.vector_size = self.embedding_model.get_sentence_embedding_dimension()
-        
-        # Create collection if it doesn't exist
-        self._ensure_collection()
+        try:
+            # Initialize Qdrant client using URL format
+            qdrant_url = f"http://{self.host}:{self.port}"
+            self.client = QdrantClient(
+                url=qdrant_url,
+                api_key=self.api_key,
+                timeout=10
+            )
+            
+            # Initialize embedding model
+            self.embedding_model = SentenceTransformer(self.embedding_model_name)
+            self.vector_size = self.embedding_model.get_sentence_embedding_dimension()
+            
+            # Create collection if it doesn't exist
+            self._ensure_collection()
+        except Exception as e:
+            logger.error(f"Failed to initialize vector service: {str(e)}")
+            self.client = None
+            self.embedding_model = None
     
     def _ensure_collection(self):
         """Ensure the collection exists with proper configuration"""
@@ -74,11 +99,19 @@ class VectorService:
     
     def generate_embedding(self, text: str) -> List[float]:
         """Generate embedding for a text"""
+        if not self.embedding_model:
+            logger.warning("Embedding model not available - returning empty vector")
+            return [0.0] * self.vector_size
+        
         embedding = self.embedding_model.encode(text, convert_to_tensor=False)
         return embedding.tolist()
     
     async def generate_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings for multiple texts efficiently"""
+        if not self.embedding_model:
+            logger.warning("Embedding model not available - returning empty vectors")
+            return [[0.0] * self.vector_size for _ in texts]
+        
         embeddings = self.embedding_model.encode(texts, convert_to_tensor=False)
         return embeddings.tolist()
     
@@ -96,6 +129,10 @@ class VectorService:
         created_at: Optional[datetime] = None
     ) -> bool:
         """Add or update a task in the vector database"""
+        if not self.client:
+            logger.warning("Vector service not available - skipping task upsert")
+            return False
+            
         try:
             # Combine title and description for embedding
             text_content = f"{title}. {description or ''}"
@@ -146,6 +183,10 @@ class VectorService:
         score_threshold: float = 0.0
     ) -> List[Tuple[Dict[str, Any], float]]:
         """Search for similar tasks using vector similarity"""
+        if not self.client:
+            logger.warning("Vector service not available - returning empty results")
+            return []
+            
         try:
             # Generate query embedding
             query_embedding = self.generate_embedding(query_text)

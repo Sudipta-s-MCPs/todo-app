@@ -15,6 +15,7 @@ import Tasks from './pages/Tasks';
 import Workspaces from './pages/Workspaces';
 import Lists from './pages/Lists';
 import Profile from './pages/Profile';
+import ChatAgent from './pages/ChatAgent';
 
 // Components
 import Layout from './components/Layout';
@@ -64,6 +65,7 @@ function App() {
                     <Route path="/workspaces/:workspaceId/lists" element={<Lists />} />
                     <Route path="/workspaces/:workspaceId/lists/:listId/tasks" element={<Tasks />} />
                     <Route path="/profile" element={<Profile />} />
+                    <Route path="/chat" element={<ChatAgent />} />
                     <Route path="/settings" element={<Navigate to="/profile" replace />} />
                   </Route>
                 </Route>

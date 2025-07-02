@@ -9,6 +9,7 @@ import Users from './pages/Users'
 import MCPClients from './pages/MCPClients'
 import Tokens from './pages/Tokens'
 import System from './pages/System'
+import Settings from './pages/Settings'
 
 function App() {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
@@ -27,6 +28,7 @@ function App() {
           <Route path="/mcp-clients" element={<MCPClients />} />
           <Route path="/tokens" element={<Tokens />} />
           <Route path="/system" element={<System />} />
+          <Route path="/settings" element={<Settings />} />
         </Routes>
       </Box>
     </Layout>

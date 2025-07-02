@@ -208,14 +208,46 @@ async def get_system_health(
         }
     
     # LDAP health check (if enabled)
-    if settings.LDAP_ENABLED:
+    # Check from database settings
+    from app.services.settings_service import settings_service
+    ldap_enabled_setting = await settings_service.get_setting("ldap_enabled", db)
+    if ldap_enabled_setting and ldap_enabled_setting.value == "true":
         try:
             from app.services.ldap import ldap_service
+            
+            # Get LDAP settings from database
+            ldap_server_setting = await settings_service.get_setting("ldap_server", db)
+            ldap_port_setting = await settings_service.get_setting("ldap_port", db)
+            
+            # Get all LDAP settings from database
+            ldap_config = {}
+            ldap_settings = [
+                'ldap_enabled', 'ldap_server', 'ldap_port', 'ldap_use_ssl', 
+                'ldap_start_tls', 'ldap_bind_dn', 'ldap_bind_password', 
+                'ldap_base_dn', 'ldap_user_search_base', 'ldap_user_filter',
+                'ldap_user_attr_email', 'ldap_user_attr_name', 'ldap_user_attr_uid'
+            ]
+            
+            for setting_key in ldap_settings:
+                setting = await settings_service.get_setting(setting_key, db)
+                if setting:
+                    if setting_key == 'ldap_enabled':
+                        ldap_config[setting_key] = setting.value == 'true'
+                    elif setting_key == 'ldap_port':
+                        ldap_config[setting_key] = int(setting.value) if setting.value else 389
+                    elif setting_key in ['ldap_use_ssl', 'ldap_start_tls']:
+                        ldap_config[setting_key] = setting.value == 'true'
+                    else:
+                        ldap_config[setting_key] = setting.value
+            
+            # Update ldap_service with database settings
+            ldap_service.update_config(ldap_config)
+            
             ldap_connected = await ldap_service.test_connection()
             if ldap_connected:
                 health_status["checks"]["ldap"] = {
                     "status": "healthy",
-                    "message": f"LDAP connected to {settings.LDAP_SERVER}:{settings.LDAP_PORT}"
+                    "message": f"LDAP connected to {ldap_server_setting.value if ldap_server_setting else 'unknown'}:{ldap_port_setting.value if ldap_port_setting else 'unknown'}"
                 }
             else:
                 health_status["status"] = "degraded"
@@ -233,11 +265,278 @@ async def get_system_health(
     return health_status
 
 
+@router.get("/services-status", response_model=Dict[str, Any])
+async def get_services_status(
+    current_user: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Check connection status for external services (admin only)"""
+    from app.services.settings_service import settings_service
+    
+    services_status = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "services": {}
+    }
+    
+    # Check LDAP connection
+    ldap_enabled = await settings_service.get_setting("ldap_enabled", db)
+    if ldap_enabled and ldap_enabled.value == "true":
+        try:
+            ldap_server = await settings_service.get_setting("ldap_server", db)
+            ldap_port = await settings_service.get_setting("ldap_port", db)
+            
+            if ldap_server and ldap_server.value:
+                # Try to import and test LDAP connection
+                try:
+                    from app.services.ldap import ldap_service
+                    
+                    # Get all LDAP settings from database
+                    ldap_config = {}
+                    ldap_settings = [
+                        'ldap_enabled', 'ldap_server', 'ldap_port', 'ldap_use_ssl', 
+                        'ldap_start_tls', 'ldap_bind_dn', 'ldap_bind_password', 
+                        'ldap_base_dn', 'ldap_user_search_base', 'ldap_user_filter',
+                        'ldap_user_attr_email', 'ldap_user_attr_name', 'ldap_user_attr_uid'
+                    ]
+                    
+                    for setting_key in ldap_settings:
+                        setting = await settings_service.get_setting(setting_key, db)
+                        if setting:
+                            if setting_key == 'ldap_enabled':
+                                ldap_config[setting_key] = setting.value == 'true'
+                            elif setting_key == 'ldap_port':
+                                ldap_config[setting_key] = int(setting.value) if setting.value else 389
+                            elif setting_key in ['ldap_use_ssl', 'ldap_start_tls']:
+                                ldap_config[setting_key] = setting.value == 'true'
+                            else:
+                                ldap_config[setting_key] = setting.value
+                    
+                    # Update ldap_service with database settings
+                    ldap_service.update_config(ldap_config)
+                    
+                    connected = await ldap_service.test_connection()
+                    services_status["services"]["ldap"] = {
+                        "enabled": True,
+                        "connected": connected,
+                        "message": f"Connected to {ldap_server.value}:{ldap_port.value}" if connected else "Connection failed",
+                        "endpoint": f"{ldap_server.value}:{ldap_port.value}"
+                    }
+                except Exception as e:
+                    services_status["services"]["ldap"] = {
+                        "enabled": True,
+                        "connected": False,
+                        "message": f"Error: {str(e)}",
+                        "endpoint": f"{ldap_server.value}:{ldap_port.value if ldap_port else '389'}"
+                    }
+            else:
+                services_status["services"]["ldap"] = {
+                    "enabled": True,
+                    "connected": False,
+                    "message": "LDAP server not configured",
+                    "endpoint": None
+                }
+        except Exception as e:
+            services_status["services"]["ldap"] = {
+                "enabled": True,
+                "connected": False,
+                "message": f"Configuration error: {str(e)}",
+                "endpoint": None
+            }
+    else:
+        services_status["services"]["ldap"] = {
+            "enabled": False,
+            "connected": False,
+            "message": "LDAP authentication disabled",
+            "endpoint": None
+        }
+    
+    # Check MinIO connection
+    minio_endpoint = await settings_service.get_setting("minio_endpoint", db)
+    if minio_endpoint and minio_endpoint.value:
+        try:
+            from minio import Minio
+            
+            minio_access_key = await settings_service.get_setting("minio_access_key", db)
+            minio_secret_key = await settings_service.get_setting("minio_secret_key", db)
+            minio_secure = await settings_service.get_setting("minio_secure", db)
+            
+            if minio_access_key and minio_secret_key:
+                client = Minio(
+                    minio_endpoint.value,
+                    access_key=minio_access_key.value,
+                    secret_key=minio_secret_key.value,
+                    secure=minio_secure.value == "true" if minio_secure else False
+                )
+                
+                # Try to list buckets as a connection test
+                try:
+                    buckets = client.list_buckets()
+                    services_status["services"]["minio"] = {
+                        "enabled": True,
+                        "connected": True,
+                        "message": f"Connected - {len(buckets)} buckets available",
+                        "endpoint": minio_endpoint.value
+                    }
+                except Exception as e:
+                    services_status["services"]["minio"] = {
+                        "enabled": True,
+                        "connected": False,
+                        "message": f"Connection failed: {str(e)}",
+                        "endpoint": minio_endpoint.value
+                    }
+            else:
+                services_status["services"]["minio"] = {
+                    "enabled": True,
+                    "connected": False,
+                    "message": "MinIO credentials not configured",
+                    "endpoint": minio_endpoint.value
+                }
+        except ImportError:
+            services_status["services"]["minio"] = {
+                "enabled": False,
+                "connected": False,
+                "message": "MinIO client not installed",
+                "endpoint": minio_endpoint.value
+            }
+        except Exception as e:
+            services_status["services"]["minio"] = {
+                "enabled": False,
+                "connected": False,
+                "message": f"Error: {str(e)}",
+                "endpoint": minio_endpoint.value
+            }
+    else:
+        services_status["services"]["minio"] = {
+            "enabled": False,
+            "connected": False,
+            "message": "MinIO not configured",
+            "endpoint": None
+        }
+    
+    # Check Qdrant connection
+    qdrant_host = await settings_service.get_setting("qdrant_host", db)
+    if qdrant_host and qdrant_host.value:
+        try:
+            from qdrant_client import QdrantClient
+            from qdrant_client.http.exceptions import UnexpectedResponse
+            
+            qdrant_port = await settings_service.get_setting("qdrant_port", db)
+            qdrant_api_key = await settings_service.get_setting("qdrant_api_key", db)
+            
+            # Use URL format instead of host/port for better compatibility
+            qdrant_url = f"http://{qdrant_host.value}:{qdrant_port.value if qdrant_port else '6333'}"
+            
+            client = QdrantClient(
+                url=qdrant_url,
+                api_key=qdrant_api_key.value if qdrant_api_key and qdrant_api_key.value else None,
+                timeout=10  # Add timeout
+            )
+            
+            # Try to get collections as a connection test
+            try:
+                collections = client.get_collections()
+                services_status["services"]["qdrant"] = {
+                    "enabled": True,
+                    "connected": True,
+                    "message": f"Connected - {len(collections.collections)} collections available",
+                    "endpoint": f"{qdrant_host.value}:{qdrant_port.value if qdrant_port else '6333'}"
+                }
+            except UnexpectedResponse as e:
+                services_status["services"]["qdrant"] = {
+                    "enabled": True,
+                    "connected": False,
+                    "message": f"Connection failed: {e.status_code} - {e.reason_phrase}",
+                    "endpoint": f"{qdrant_host.value}:{qdrant_port.value if qdrant_port else '6333'}"
+                }
+            except Exception as e:
+                services_status["services"]["qdrant"] = {
+                    "enabled": True,
+                    "connected": False,
+                    "message": f"Connection failed: {str(e)}",
+                    "endpoint": f"{qdrant_host.value}:{qdrant_port.value if qdrant_port else '6333'}"
+                }
+        except ImportError:
+            services_status["services"]["qdrant"] = {
+                "enabled": False,
+                "connected": False,
+                "message": "Qdrant client not installed",
+                "endpoint": f"{qdrant_host.value}:{qdrant_port.value if qdrant_port else '6333'}"
+            }
+        except Exception as e:
+            services_status["services"]["qdrant"] = {
+                "enabled": False,
+                "connected": False,
+                "message": f"Error: {str(e)}",
+                "endpoint": qdrant_host.value
+            }
+    else:
+        services_status["services"]["qdrant"] = {
+            "enabled": False,
+            "connected": False,
+            "message": "Qdrant not configured",
+            "endpoint": None
+        }
+    
+    # Check Groq AI connection
+    groq_api_key = await settings_service.get_setting("groq_api_key", db)
+    if groq_api_key and groq_api_key.value:
+        try:
+            import httpx
+            
+            # Test Groq API with a simple request
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    "https://api.groq.com/openai/v1/models",
+                    headers={"Authorization": f"Bearer {groq_api_key.value}"},
+                    timeout=5.0
+                )
+                
+                if response.status_code == 200:
+                    models = response.json()
+                    services_status["services"]["groq"] = {
+                        "enabled": True,
+                        "connected": True,
+                        "message": f"Connected - {len(models.get('data', []))} models available",
+                        "endpoint": "api.groq.com"
+                    }
+                else:
+                    services_status["services"]["groq"] = {
+                        "enabled": True,
+                        "connected": False,
+                        "message": f"API error: {response.status_code}",
+                        "endpoint": "api.groq.com"
+                    }
+        except Exception as e:
+            services_status["services"]["groq"] = {
+                "enabled": True,
+                "connected": False,
+                "message": f"Connection failed: {str(e)}",
+                "endpoint": "api.groq.com"
+            }
+    else:
+        services_status["services"]["groq"] = {
+            "enabled": False,
+            "connected": False,
+            "message": "Groq API key not configured",
+            "endpoint": None
+        }
+    
+    return services_status
+
+
 @router.get("/config", response_model=Dict[str, Any])
 async def get_system_config(
-    current_user: User = Depends(get_current_admin_user)
+    current_user: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db)
 ):
     """Get system configuration (admin only)"""
+    from app.services.settings_service import settings_service
+    
+    # Get feature flags from database
+    mfa_enabled_setting = await settings_service.get_setting("mfa_enabled", db)
+    api_keys_enabled_setting = await settings_service.get_setting("api_keys_enabled", db)
+    websockets_enabled_setting = await settings_service.get_setting("websockets_enabled", db)
+    ldap_enabled_setting = await settings_service.get_setting("ldap_enabled", db)
     
     # Return safe configuration values (no secrets)
     return {
@@ -249,11 +548,11 @@ async def get_system_config(
         "refresh_token_expire_days": settings.REFRESH_TOKEN_EXPIRE_DAYS,
         "mcp_token_expire_hours": settings.MCP_TOKEN_EXPIRE_HOURS,
         "features": {
-            "oauth_enabled": settings.OAUTH_ENABLED,
-            "mfa_enabled": settings.MFA_ENABLED,
-            "api_keys_enabled": settings.API_KEYS_ENABLED,
-            "websockets_enabled": settings.WEBSOCKETS_ENABLED,
-            "ldap_enabled": settings.LDAP_ENABLED
+            "oauth_enabled": settings.OAUTH_ENABLED,  # OAuth remains from env as it's not in DB settings
+            "mfa_enabled": mfa_enabled_setting.value == "true" if mfa_enabled_setting else settings.MFA_ENABLED,
+            "api_keys_enabled": api_keys_enabled_setting.value == "true" if api_keys_enabled_setting else settings.API_KEYS_ENABLED,
+            "websockets_enabled": websockets_enabled_setting.value == "true" if websockets_enabled_setting else settings.WEBSOCKETS_ENABLED,
+            "ldap_enabled": ldap_enabled_setting.value == "true" if ldap_enabled_setting else settings.LDAP_ENABLED
         },
         "limits": {
             "max_workspaces_per_user": settings.MAX_WORKSPACES_PER_USER,
@@ -263,11 +562,11 @@ async def get_system_config(
             "max_devices_per_user": settings.MAX_DEVICES_PER_USER
         },
         "ldap": {
-            "enabled": settings.LDAP_ENABLED,
-            "server": settings.LDAP_SERVER if settings.LDAP_ENABLED else None,
-            "port": settings.LDAP_PORT if settings.LDAP_ENABLED else None,
-            "use_ssl": settings.LDAP_USE_SSL if settings.LDAP_ENABLED else None,
-            "base_dn": settings.LDAP_BASE_DN if settings.LDAP_ENABLED else None,
-            "auto_create_user": settings.LDAP_AUTO_CREATE_USER if settings.LDAP_ENABLED else None
+            "enabled": ldap_enabled_setting.value == "true" if ldap_enabled_setting else settings.LDAP_ENABLED,
+            "server": (await settings_service.get_setting("ldap_server", db)).value if ldap_enabled_setting and ldap_enabled_setting.value == "true" else None,
+            "port": int((await settings_service.get_setting("ldap_port", db)).value) if ldap_enabled_setting and ldap_enabled_setting.value == "true" else None,
+            "use_ssl": (await settings_service.get_setting("ldap_use_ssl", db)).value == "true" if ldap_enabled_setting and ldap_enabled_setting.value == "true" else None,
+            "base_dn": (await settings_service.get_setting("ldap_base_dn", db)).value if ldap_enabled_setting and ldap_enabled_setting.value == "true" else None,
+            "auto_create_user": (await settings_service.get_setting("ldap_auto_create_user", db)).value == "true" if ldap_enabled_setting and ldap_enabled_setting.value == "true" else None
         }
     }

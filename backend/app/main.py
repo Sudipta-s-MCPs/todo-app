@@ -78,7 +78,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Add security middleware
+# Add middleware
 from app.middleware import (
     SecurityHeadersMiddleware,
     RequestValidationMiddleware,
@@ -90,13 +90,25 @@ from app.middleware import (
     RequestTrackingMiddleware
 )
 
-# Add security headers
-if settings.ENABLE_SECURITY_HEADERS:
-    app.add_middleware(SecurityHeadersMiddleware)
+# IMPORTANT: Middleware order matters! They are applied in reverse order
+# The last middleware added is the first to process requests
 
-# Add request validation
-if settings.ENABLE_REQUEST_VALIDATION:
-    app.add_middleware(RequestValidationMiddleware)
+# Add error handler middleware (should be outermost/last added)
+app.add_middleware(ErrorHandlerMiddleware)
+
+# Add request tracking middleware (should be early in the chain)
+app.add_middleware(RequestTrackingMiddleware)
+
+# Add IP whitelist for admin endpoints
+if settings.ADMIN_IP_WHITELIST:
+    app.add_middleware(
+        IPWhitelistMiddleware,
+        whitelist=settings.ADMIN_IP_WHITELIST
+    )
+
+# Add audit logging
+if settings.ENABLE_AUDIT_LOGGING:
+    app.add_middleware(AuditLogMiddleware)
 
 # Add rate limiting
 if settings.ENABLE_RATE_LIMITING:
@@ -107,16 +119,13 @@ if settings.ENABLE_RATE_LIMITING:
         burst_size=settings.RATE_LIMIT_BURST
     )
 
-# Add audit logging
-if settings.ENABLE_AUDIT_LOGGING:
-    app.add_middleware(AuditLogMiddleware)
+# Add request validation
+if settings.ENABLE_REQUEST_VALIDATION:
+    app.add_middleware(RequestValidationMiddleware)
 
-# Add IP whitelist for admin endpoints
-if settings.ADMIN_IP_WHITELIST:
-    app.add_middleware(
-        IPWhitelistMiddleware,
-        whitelist=settings.ADMIN_IP_WHITELIST
-    )
+# Add security headers
+if settings.ENABLE_SECURITY_HEADERS:
+    app.add_middleware(SecurityHeadersMiddleware)
 
 
 @app.get("/")

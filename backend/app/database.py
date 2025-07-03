@@ -6,20 +6,31 @@ Created: 2025-01-30 13:49:00 PST
 from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import declarative_base
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import AsyncAdaptedQueuePool
+import logging
 
 from app.config import settings
 
-# Create async engine
+logger = logging.getLogger(__name__)
+
+# Create async engine with proper connection pooling
 engine = create_async_engine(
     str(settings.DATABASE_URL),
-    poolclass=NullPool,  # Disable connection pooling for async
+    poolclass=AsyncAdaptedQueuePool,
+    pool_size=20,  # Number of connections to maintain in pool
+    max_overflow=10,  # Maximum overflow connections above pool_size
+    pool_timeout=10,  # Timeout for getting connection from pool
+    pool_recycle=3600,  # Recycle connections after 1 hour
+    pool_pre_ping=True,  # Test connections before using
     echo=False,  # Set to True for SQL logging
     future=True,
     connect_args={
-        "server_settings": {"jit": "off"},
-        "timeout": 10,
-        "command_timeout": 10,
+        "server_settings": {
+            "jit": "off",
+            "application_name": "smart-todo-backend"
+        },
+        "timeout": 5,  # Connection timeout
+        "command_timeout": 30,  # Query timeout
     }
 )
 
@@ -43,8 +54,8 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         try:
             yield session
-            await session.commit()
-        except Exception:
+        except Exception as e:
+            logger.error(f"Database session error: {e}")
             await session.rollback()
             raise
         finally:
@@ -68,3 +79,16 @@ async def close_db() -> None:
     Close database connections
     """
     await engine.dispose()
+
+
+def get_pool_status() -> dict:
+    """
+    Get current connection pool status
+    """
+    pool = engine.pool
+    return {
+        "size": pool.size(),
+        "checked_in": pool.checked_in_connections,
+        "overflow": pool.overflow(),
+        "total": pool.size() + pool.overflow()
+    }

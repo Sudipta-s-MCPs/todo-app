@@ -233,6 +233,75 @@ class SettingsService:
             "description": "Maximum AI tokens per user per month",
             "validation_rules": {"min": 1000, "max": 1000000}
         },
+        {
+            "key": "enable_vector_search",
+            "value": os.getenv("ENABLE_VECTOR_SEARCH", "true"),
+            "value_type": "bool",
+            "category": SettingCategory.AI,
+            "display_name": "Enable Vector Search",
+            "description": "Enable semantic search using vector embeddings"
+        },
+        
+        # New AI Provider Settings
+        {
+            "key": "huggingface_api_token",
+            "value": os.getenv("HUGGINGFACE_API_TOKEN", ""),
+            "value_type": "string",
+            "category": SettingCategory.AI,
+            "display_name": "HuggingFace API Token",
+            "description": "API token for HuggingFace Pro subscription. With hf-inference provider, uses direct HuggingFace API with $2/month included credits",
+            "is_sensitive": True
+        },
+        {
+            "key": "huggingface_model",
+            "value": os.getenv("HUGGINGFACE_MODEL", "meta-llama/Llama-3.1-8B-Instruct"),
+            "value_type": "string",
+            "category": SettingCategory.AI,
+            "display_name": "HuggingFace Model",
+            "description": "HuggingFace model to use for AI operations (works with hf-inference provider)"
+        },
+        {
+            "key": "huggingface_provider",
+            "value": os.getenv("HUGGINGFACE_PROVIDER", "hf-inference"),
+            "value_type": "string",
+            "category": SettingCategory.AI,
+            "display_name": "HuggingFace Provider",
+            "description": "HuggingFace Inference Provider: 'hf-inference' uses HuggingFace's direct API (recommended for Pro users), 'auto' for automatic provider selection, or choose specific third-party providers",
+            "validation_rules": {"enum": ["hf-inference", "auto", "together", "replicate", "sambanova", "fal-ai", "fireworks-ai", "groq", "hyperbolic", "nebius", "novita", "nscale", "cerebras", "cohere", "featherless-ai", "black-forest-labs"]}
+        },
+        {
+            "key": "gemini_api_key",
+            "value": os.getenv("GEMINI_API_KEY", ""),
+            "value_type": "string",
+            "category": SettingCategory.AI,
+            "display_name": "Google Gemini API Key",
+            "description": "API key for Google Gemini (secondary AI provider, free tier available)",
+            "is_sensitive": True
+        },
+        {
+            "key": "gemini_model",
+            "value": os.getenv("GEMINI_MODEL", "gemini-1.5-flash"),
+            "value_type": "string",
+            "category": SettingCategory.AI,
+            "display_name": "Gemini Model",
+            "description": "Google Gemini model to use for AI features"
+        },
+        {
+            "key": "ai_provider_priority",
+            "value": os.getenv("AI_PROVIDER_PRIORITY", "huggingface,gemini,groq"),
+            "value_type": "string",
+            "category": SettingCategory.AI,
+            "display_name": "AI Provider Priority",
+            "description": "Comma-separated list of AI providers in priority order"
+        },
+        {
+            "key": "ai_provider_mode",
+            "value": os.getenv("AI_PROVIDER_MODE", "hybrid"),
+            "value_type": "string",
+            "category": SettingCategory.AI,
+            "display_name": "AI Provider Mode",
+            "description": "AI provider mode: 'hybrid' for multi-provider or 'groq_only' for backward compatibility"
+        },
         
         # Integration Settings - LDAP
         {

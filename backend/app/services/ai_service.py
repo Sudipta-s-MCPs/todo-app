@@ -11,12 +11,16 @@ from datetime import datetime, timedelta
 import asyncio
 from functools import lru_cache
 
-from groq import Groq
 import redis.asyncio as redis
 from pydantic import BaseModel
 
 from app.services.cache import get_redis_client
 from app.utils.logging import get_logger
+from app.services.dynamic_settings import dynamic_settings
+from app.services.ai_providers import (
+    AIProvider, AIProviderError, AIProviderUnavailableError,
+    GroqProvider, HuggingFaceProvider, GeminiProvider
+)
 
 logger = get_logger(__name__)
 
@@ -28,11 +32,14 @@ class TaskAnalysis(BaseModel):
     reasoning: str
     suggested_action: str  # "create_new", "update_existing", "merge"
     suggested_title: Optional[str] = None
-    suggested_workspace: Optional[str] = None
-    suggested_list: Optional[str] = None
+    suggested_workspace: Optional[str] = None  # workspace ID
+    suggested_workspace_name: Optional[str] = None  # workspace name for display
+    suggested_list: Optional[str] = None  # list ID
+    suggested_list_name: Optional[str] = None  # list name for display
     suggested_priority: Optional[str] = None
     suggested_due_date: Optional[str] = None
     extracted_entities: Optional[Dict[str, Any]] = None
+    provider_used: Optional[str] = None
 
 
 class UsageTracker:
@@ -40,8 +47,8 @@ class UsageTracker:
     
     def __init__(self, redis_client: redis.Redis):
         self.redis = redis_client
-        self.daily_limit = int(os.getenv("AI_DAILY_TOKEN_LIMIT", "20000"))
-        self.user_monthly_limit = int(os.getenv("AI_USER_MONTHLY_TOKEN_LIMIT", "50000"))
+        self.daily_limit = dynamic_settings.AI_DAILY_TOKEN_LIMIT
+        self.user_monthly_limit = dynamic_settings.AI_USER_MONTHLY_TOKEN_LIMIT
     
     async def check_and_update_usage(self, user_id: str, tokens: int) -> bool:
         """Check if usage is within limits and update counters"""
@@ -89,14 +96,88 @@ class UsageTracker:
 
 
 class AIService:
-    """Main AI service for task analysis"""
+    """Main AI service for task analysis with multi-provider support"""
     
     def __init__(self):
-        self.client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-        self.model = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
-        self.cache_ttl = int(os.getenv("AI_CACHE_TTL", "86400"))  # 24 hours
-        self.temperature = float(os.getenv("AI_TEMPERATURE", "0.3"))
-        self.max_tokens = int(os.getenv("AI_MAX_TOKENS", "500"))
+        self._providers: List[AIProvider] = []
+        self._initialized = False
+        self.cache_ttl = None
+        self.temperature = None
+        self.max_tokens = None
+    
+    async def _ensure_initialized(self):
+        """Initialize AI providers based on configuration"""
+        if self._initialized:
+            return
+        
+        # Ensure dynamic settings are loaded
+        try:
+            if not dynamic_settings._loaded:
+                logger.info("Refreshing dynamic settings for AI service initialization")
+                await dynamic_settings.refresh()
+        except Exception as e:
+            logger.error(f"Failed to refresh dynamic settings: {e}")
+        
+        # Load settings
+        self.cache_ttl = dynamic_settings.AI_CACHE_TTL
+        self.temperature = dynamic_settings.AI_TEMPERATURE
+        self.max_tokens = dynamic_settings.AI_MAX_TOKENS
+        
+        # Initialize providers based on configuration
+        provider_mode = dynamic_settings.AI_PROVIDER_MODE
+        
+        if provider_mode == "groq_only":
+            # Backward compatibility mode
+            groq_provider = GroqProvider()
+            if await groq_provider.initialize():
+                self._providers = [groq_provider]
+        else:
+            # Hybrid mode - initialize all configured providers
+            provider_priority = dynamic_settings.AI_PROVIDER_PRIORITY.split(",")
+            available_providers = {
+                "huggingface": HuggingFaceProvider,
+                "gemini": GeminiProvider,
+                "groq": GroqProvider
+            }
+            
+            for provider_name in provider_priority:
+                provider_name = provider_name.strip().lower()
+                if provider_name in available_providers:
+                    provider_class = available_providers[provider_name]
+                    provider = provider_class()
+                    if await provider.initialize():
+                        self._providers.append(provider)
+                        logger.info(f"Initialized {provider_name} provider")
+                    else:
+                        logger.warning(f"Failed to initialize {provider_name} provider")
+            
+            # Sort providers by priority
+            self._providers.sort(key=lambda p: p.get_priority())
+        
+        self._initialized = True
+        logger.info(f"AI Service initialized with {len(self._providers)} provider(s)")
+    
+    async def _call_provider(self, provider: AIProvider, prompt: str, system_prompt: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Call a specific provider and handle errors"""
+        try:
+            response = await provider.complete(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+                response_format={"type": "json_object"}
+            )
+            
+            # Parse JSON response
+            content = response.content
+            return json.loads(content)
+            
+        except AIProviderUnavailableError as e:
+            logger.warning(f"{provider.get_name()} temporarily unavailable: {str(e)}")
+            return None
+        except Exception as e:
+            logger.error(f"{provider.get_name()} failed: {str(e)}")
+            return None
     
     def _get_cache_key(self, operation: str, content: str) -> str:
         """Generate cache key for AI responses"""
@@ -173,42 +254,47 @@ Respond in JSON format:
                 suggested_action="create_new"
             )
         
-        try:
-            # Call Groq API
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are a task management assistant. Analyze tasks for duplicates and provide suggestions in JSON format."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-                response_format={"type": "json_object"}
-            )
-            
-            result = json.loads(response.choices[0].message.content)
-            analysis = TaskAnalysis(**result)
-            
-            # Cache the response
-            await self._cache_response(cache_key, analysis.model_dump())
-            
-            return analysis
-            
-        except Exception as e:
-            logger.error(f"AI analysis failed: {str(e)}")
-            # Fallback response
+        # Ensure providers are initialized
+        await self._ensure_initialized()
+        
+        if not self._providers:
+            logger.warning("No AI providers available")
             return TaskAnalysis(
                 is_duplicate=False,
                 confidence=0.0,
-                reasoning=f"AI analysis failed: {str(e)}",
+                reasoning="AI service not configured. Please configure AI providers in admin settings.",
                 suggested_action="create_new"
             )
+        
+        # Try each provider in priority order
+        system_prompt = "You are a task management assistant. Analyze tasks for duplicates and provide suggestions in JSON format."
+        
+        for provider in self._providers:
+            result = await self._call_provider(provider, prompt, system_prompt)
+            if result:
+                try:
+                    analysis = TaskAnalysis(**result)
+                    # Cache the response
+                    await self._cache_response(cache_key, analysis.model_dump())
+                    return analysis
+                except Exception as e:
+                    logger.error(f"Failed to parse response from {provider.get_name()}: {str(e)}")
+                    continue
+        
+        # All providers failed - return fallback
+        logger.error("All AI providers failed for duplicate analysis")
+        return TaskAnalysis(
+            is_duplicate=False,
+            confidence=0.0,
+            reasoning="AI analysis unavailable - all providers failed",
+            suggested_action="create_new"
+        )
     
     async def parse_natural_task(
         self,
         natural_text: str,
-        workspaces: List[Dict[str, str]],
-        lists: List[Dict[str, str]],
+        workspaces: List[Dict[str, Any]],
+        lists: List[Dict[str, Any]],
         user_id: str
     ) -> TaskAnalysis:
         """Parse natural language task input and extract structured data"""
@@ -220,16 +306,37 @@ Respond in JSON format:
         if cached:
             return TaskAnalysis(**cached)
         
-        # Prepare context
-        workspace_names = [ws['name'] for ws in workspaces]
-        list_info = [f"{lst['name']} (in {lst['workspace_name']})" for lst in lists]
+        # Prepare context - create a tree structure
+        workspace_tree = []
+        for ws in workspaces:
+            ws_lists = [lst for lst in lists if lst.get('workspace_id') == ws['id']]
+            workspace_tree.append({
+                'name': ws['name'],
+                'id': ws['id'],
+                'lists': [{'name': lst['name'], 'id': lst['id']} for lst in ws_lists]
+            })
         
         prompt = f"""Parse this natural language task and extract structured information.
 
 Task: {natural_text}
 
-Available workspaces: {', '.join(workspace_names)}
-Available lists: {', '.join(list_info[:20])}  # Limit to save tokens
+Available workspaces and their lists:
+{json.dumps(workspace_tree, indent=2)}
+
+IMPORTANT RULES:
+1. The suggested_title should be a SHORT, ACTIONABLE task title (3-8 words typically)
+2. Remove workspace and list references from the title
+3. Extract the core action as the title
+4. Match workspace and list names case-insensitively
+5. If a list is mentioned, also set the corresponding workspace
+6. suggested_workspace should be the workspace ID (not name)
+7. suggested_list should be the list ID (not name)
+
+Examples:
+- "in todo app workspace to fix profile page" → title: "Fix profile page", workspace: [TodoApp ID]
+- "Add task to update docs in Dev workspace Backend list" → title: "Update docs", workspace: [Dev ID], list: [Backend ID]
+- "Remember to buy groceries" → title: "Buy groceries"
+- "Fix bug in frontend list" → title: "Fix bug", list: [frontend list ID], workspace: [workspace containing frontend list]
 
 Extract and respond in JSON format:
 {{
@@ -237,9 +344,11 @@ Extract and respond in JSON format:
     "confidence": 1.0,
     "reasoning": "Task parsed successfully",
     "suggested_action": "create_new",
-    "suggested_title": "extracted task title",
-    "suggested_workspace": "best matching workspace name or null",
-    "suggested_list": "best matching list name or null",
+    "suggested_title": "SHORT extracted task title (core action only)",
+    "suggested_workspace": "workspace ID from the tree or null",
+    "suggested_workspace_name": "workspace name for display",
+    "suggested_list": "list ID from the tree or null",
+    "suggested_list_name": "list name for display",
     "suggested_priority": "low/medium/high or null",
     "suggested_due_date": "ISO date if mentioned or null",
     "extracted_entities": {{
@@ -263,38 +372,53 @@ Extract and respond in JSON format:
                 suggested_action="create_new",
                 suggested_title=natural_text[:100],  # First 100 chars as title
                 suggested_workspace=workspaces[0]['name'] if workspaces else None,
-                suggested_list=lists[0]['name'] if lists else None
+                suggested_list=lists[0]['name'] if lists else None,
+                provider_used="none"
             )
         
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are a task parsing assistant. Extract structured task information from natural language."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-                response_format={"type": "json_object"}
-            )
-            
-            result = json.loads(response.choices[0].message.content)
-            analysis = TaskAnalysis(**result)
-            
-            # Cache the response
-            await self._cache_response(cache_key, analysis.model_dump())
-            
-            return analysis
-            
-        except Exception as e:
-            logger.error(f"AI parsing failed: {str(e)}")
+        # Ensure providers are initialized
+        await self._ensure_initialized()
+        
+        if not self._providers:
+            logger.warning("No AI providers available")
             return TaskAnalysis(
                 is_duplicate=False,
-                confidence=0.0,
-                reasoning=f"AI parsing failed: {str(e)}",
+                confidence=0.5,
+                reasoning="AI parsing unavailable, using basic extraction",
                 suggested_action="create_new",
-                suggested_title=natural_text[:100]
+                suggested_title=natural_text[:100],  # First 100 chars as title
+                suggested_workspace=workspaces[0]['name'] if workspaces else None,
+                suggested_list=lists[0]['name'] if lists else None,
+                provider_used="none"
             )
+        
+        # Try each provider in priority order
+        system_prompt = "You are a task parsing assistant. Extract structured task information from natural language."
+        
+        for provider in self._providers:
+            result = await self._call_provider(provider, prompt, system_prompt)
+            if result:
+                try:
+                    analysis = TaskAnalysis(**result)
+                    # Add provider information to the analysis
+                    analysis.provider_used = provider.get_name()
+                    # Cache the response
+                    await self._cache_response(cache_key, analysis.model_dump())
+                    return analysis
+                except Exception as e:
+                    logger.error(f"Failed to parse response from {provider.get_name()}: {str(e)}")
+                    continue
+        
+        # All providers failed - return basic extraction
+        logger.error("All AI providers failed for task parsing")
+        return TaskAnalysis(
+            is_duplicate=False,
+            confidence=0.0,
+            reasoning="AI parsing failed - all providers unavailable",
+            suggested_action="create_new",
+            suggested_title=natural_text[:100],
+            provider_used="failed"
+        )
     
     async def suggest_task_improvements(
         self,
@@ -303,6 +427,13 @@ Extract and respond in JSON format:
         user_id: str
     ) -> Dict[str, Any]:
         """Suggest improvements for task clarity and actionability"""
+        
+        # Check cache
+        cache_content = f"{task_title}|{task_description}"
+        cache_key = self._get_cache_key("improve", cache_content)
+        cached = await self._get_cached_response(cache_key)
+        if cached:
+            return cached
         
         prompt = f"""Suggest improvements for this task:
 
@@ -318,14 +449,50 @@ Provide suggestions in JSON format:
     "actionability_score": 0.0-1.0
 }}"""
         
-        # Similar implementation as above methods...
-        # Returning simplified version for brevity
+        # Check usage
+        estimated_tokens = len(prompt.split()) * 2
+        redis_client = await get_redis_client()
+        usage_tracker = UsageTracker(redis_client)
+        
+        if not await usage_tracker.check_and_update_usage(user_id, estimated_tokens):
+            # Return basic response
+            return {
+                "improved_title": task_title,
+                "improved_description": task_description,
+                "suggested_subtasks": [],
+                "clarity_score": 0.5,
+                "actionability_score": 0.5
+            }
+        
+        # Ensure providers are initialized
+        await self._ensure_initialized()
+        
+        if not self._providers:
+            return {
+                "improved_title": task_title,
+                "improved_description": task_description,
+                "suggested_subtasks": [],
+                "clarity_score": 0.5,
+                "actionability_score": 0.5
+            }
+        
+        # Try each provider
+        system_prompt = "You are a task improvement assistant. Analyze tasks and suggest improvements in JSON format."
+        
+        for provider in self._providers:
+            result = await self._call_provider(provider, prompt, system_prompt)
+            if result:
+                # Cache and return
+                await self._cache_response(cache_key, result)
+                return result
+        
+        # Fallback if all providers fail
         return {
             "improved_title": task_title,
             "improved_description": task_description,
             "suggested_subtasks": [],
-            "clarity_score": 0.8,
-            "actionability_score": 0.9
+            "clarity_score": 0.5,
+            "actionability_score": 0.5
         }
 
 

@@ -24,6 +24,7 @@ import {
   Delete as DeleteIcon,
   Block as BlockIcon,
   CheckCircle as ActiveIcon,
+  CheckCircle,
 } from '@mui/icons-material'
 import { format } from 'date-fns'
 import { api } from '../services/api'
@@ -34,6 +35,8 @@ interface User {
   full_name: string
   is_active: boolean
   is_admin: boolean
+  is_approved: boolean
+  approval_status: string
   mfa_enabled: boolean
   created_at: string
   last_login_at: string | null
@@ -106,6 +109,27 @@ export default function Users() {
       fetchUsers()
     } catch (error) {
       setError('Failed to delete user')
+    }
+  }
+
+  const handleApproveUser = async (userId: string) => {
+    try {
+      await api.patch(`/admin/users/${userId}/approve`)
+      fetchUsers()
+    } catch (error) {
+      setError('Failed to approve user')
+    }
+  }
+
+  const handleRejectUser = async (userId: string) => {
+    const reason = window.prompt('Please provide a reason for rejection:')
+    if (!reason) return
+
+    try {
+      await api.patch(`/admin/users/${userId}/reject`, { reason })
+      fetchUsers()
+    } catch (error) {
+      setError('Failed to reject user')
     }
   }
 
@@ -199,6 +223,43 @@ export default function Users() {
       ),
     },
     {
+      field: 'approval_status',
+      headerName: 'Approval',
+      width: 120,
+      renderCell: (params: GridRenderCellParams) => {
+        const getApprovalChip = () => {
+          switch (params.row.approval_status) {
+            case 'approved':
+              return {
+                label: 'Approved',
+                color: 'success' as const,
+                variant: 'filled' as const
+              }
+            case 'pending':
+              return {
+                label: 'Pending',
+                color: 'warning' as const,
+                variant: 'filled' as const
+              }
+            case 'rejected':
+              return {
+                label: 'Rejected',
+                color: 'error' as const,
+                variant: 'filled' as const
+              }
+            default:
+              return {
+                label: 'Unknown',
+                color: 'default' as const,
+                variant: 'outlined' as const
+              }
+          }
+        }
+        const chipProps = getApprovalChip()
+        return <Chip {...chipProps} size="small" />
+      },
+    },
+    {
       field: 'is_admin',
       headerName: 'Role',
       width: 100,
@@ -248,20 +309,42 @@ export default function Users() {
     {
       field: 'actions',
       headerName: 'Actions',
-      width: 120,
+      width: 180,
       sortable: false,
       renderCell: (params: GridRenderCellParams) => (
         <Box>
+          {params.row.approval_status === 'pending' && (
+            <>
+              <IconButton
+                size="small"
+                onClick={() => handleApproveUser(params.row.id)}
+                color="success"
+                title="Approve user"
+              >
+                <CheckCircle />
+              </IconButton>
+              <IconButton
+                size="small"
+                onClick={() => handleRejectUser(params.row.id)}
+                color="error"
+                title="Reject user"
+              >
+                <BlockIcon />
+              </IconButton>
+            </>
+          )}
           <IconButton
             size="small"
             onClick={() => handleToggleActive(params.row.id)}
             color={params.row.is_active ? 'warning' : 'success'}
+            title={params.row.is_active ? 'Deactivate user' : 'Activate user'}
           >
             {params.row.is_active ? <BlockIcon /> : <ActiveIcon />}
           </IconButton>
           <IconButton
             size="small"
             onClick={() => handleOpenDialog(params.row)}
+            title="Edit user"
           >
             <EditIcon />
           </IconButton>

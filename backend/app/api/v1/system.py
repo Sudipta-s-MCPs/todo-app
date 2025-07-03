@@ -521,6 +521,164 @@ async def get_services_status(
             "endpoint": None
         }
     
+    # Check HuggingFace AI connection using new Inference Providers API
+    huggingface_token = await settings_service.get_setting("huggingface_api_token", db)
+    huggingface_model = await settings_service.get_setting("huggingface_model", db)
+    huggingface_provider = await settings_service.get_setting("huggingface_provider", db)
+    
+    if huggingface_token and huggingface_token.value and huggingface_model and huggingface_model.value:
+        try:
+            from huggingface_hub import InferenceClient
+            
+            model_name = huggingface_model.value
+            provider = huggingface_provider.value if huggingface_provider and huggingface_provider.value else "auto"
+            endpoint = f"Inference Providers ({provider})" if provider != "auto" else "Inference Providers (auto)"
+            
+            # Create InferenceClient with proper provider support
+            if provider == "auto":
+                client = InferenceClient(provider="auto", token=huggingface_token.value)
+            else:
+                client = InferenceClient(
+                    provider=provider,
+                    token=huggingface_token.value
+                )
+            
+            # Test with a minimal request
+            test_messages = [{"role": "user", "content": "Hello"}]
+            completion = client.chat_completion(
+                messages=test_messages,
+                model=model_name,
+                max_tokens=1,
+                temperature=0.1
+            )
+            
+            # If we get here, the connection is successful
+            services_status["services"]["huggingface"] = {
+                "enabled": True,
+                "connected": True,
+                "message": f"Connected - Model: {model_name}",
+                "endpoint": endpoint
+            }
+            
+        except ImportError:
+            services_status["services"]["huggingface"] = {
+                "enabled": False,
+                "connected": False,
+                "message": "huggingface_hub library not available or outdated",
+                "endpoint": None
+            }
+        except Exception as e:
+            error_msg = str(e).lower()
+            endpoint = f"Inference Providers ({provider})" if provider != "auto" else "Inference Providers (auto)"
+            
+            # Handle specific error cases
+            if "not supported by any provider" in error_msg:
+                services_status["services"]["huggingface"] = {
+                    "enabled": True,
+                    "connected": False,
+                    "message": f"Model not supported by enabled providers - {model_name}. Check https://hf.co/settings/inference-providers",
+                    "endpoint": endpoint
+                }
+            elif "rate limit" in error_msg or "429" in error_msg:
+                services_status["services"]["huggingface"] = {
+                    "enabled": True,
+                    "connected": True,  # Rate limit means service is working
+                    "message": f"Rate limited - {model_name}",
+                    "endpoint": endpoint
+                }
+            elif "authentication" in error_msg or "401" in error_msg:
+                services_status["services"]["huggingface"] = {
+                    "enabled": True,
+                    "connected": False,
+                    "message": "Authentication failed - check API token",
+                    "endpoint": endpoint
+                }
+            elif "loading" in error_msg or "503" in error_msg:
+                services_status["services"]["huggingface"] = {
+                    "enabled": True,
+                    "connected": True,  # Loading means service is working
+                    "message": f"Model loading - {model_name}",
+                    "endpoint": endpoint
+                }
+            elif "paused" in error_msg or "endpoint is paused" in error_msg:
+                services_status["services"]["huggingface"] = {
+                    "enabled": True,
+                    "connected": True,  # Paused means service is working but endpoint needs activation
+                    "message": f"Model endpoint paused - {model_name} (will activate on use)",
+                    "endpoint": endpoint
+                }
+            elif "timeout" in error_msg:
+                services_status["services"]["huggingface"] = {
+                    "enabled": True,
+                    "connected": False,
+                    "message": f"Request timeout - {model_name}",
+                    "endpoint": endpoint
+                }
+            else:
+                services_status["services"]["huggingface"] = {
+                    "enabled": True,
+                    "connected": False,
+                    "message": f"Connection failed: {str(e)[:80]}...",
+                    "endpoint": endpoint
+                }
+    else:
+        missing_parts = []
+        if not huggingface_token or not huggingface_token.value:
+            missing_parts.append("API token")
+        if not huggingface_model or not huggingface_model.value:
+            missing_parts.append("model")
+        
+        services_status["services"]["huggingface"] = {
+            "enabled": False,
+            "connected": False,
+            "message": f"Missing: {', '.join(missing_parts)}",
+            "endpoint": None
+        }
+    
+    # Check Gemini AI connection
+    gemini_api_key = await settings_service.get_setting("gemini_api_key", db)
+    if gemini_api_key and gemini_api_key.value:
+        try:
+            import httpx
+            
+            # Test Gemini API with a simple request to list models
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"https://generativelanguage.googleapis.com/v1beta/models?key={gemini_api_key.value}",
+                    timeout=5.0
+                )
+                
+                if response.status_code == 200:
+                    models = response.json()
+                    model_count = len(models.get('models', []))
+                    services_status["services"]["gemini"] = {
+                        "enabled": True,
+                        "connected": True,
+                        "message": f"Connected - {model_count} models available",
+                        "endpoint": "generativelanguage.googleapis.com"
+                    }
+                else:
+                    services_status["services"]["gemini"] = {
+                        "enabled": True,
+                        "connected": False,
+                        "message": f"API error: {response.status_code}",
+                        "endpoint": "generativelanguage.googleapis.com"
+                    }
+        except Exception as e:
+            services_status["services"]["gemini"] = {
+                "enabled": True,
+                "connected": False,
+                "message": f"Connection failed: {str(e)}",
+                "endpoint": "generativelanguage.googleapis.com"
+            }
+    else:
+        services_status["services"]["gemini"] = {
+            "enabled": False,
+            "connected": False,
+            "message": "Gemini API key not configured",
+            "endpoint": None
+        }
+    
     return services_status
 
 

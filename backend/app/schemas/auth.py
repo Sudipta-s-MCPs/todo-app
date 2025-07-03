@@ -151,6 +151,7 @@ class UserInfo(BaseModel):
     is_active: bool
     is_verified: bool
     is_admin: bool
+    approval_status: str
     two_factor_enabled: bool
     created_at: datetime
     last_active_at: Optional[datetime]

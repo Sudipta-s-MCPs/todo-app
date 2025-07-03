@@ -4,6 +4,7 @@ Created: 2025-01-30 14:35:00 PST
 """
 
 import os
+import sys
 import asyncio
 from typing import List, Optional, Dict, Any
 from datetime import datetime
@@ -12,8 +13,11 @@ import httpx
 from fastmcp import FastMCP, Context
 from pydantic import BaseModel, Field
 
+# Add parent directory to Python path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 # Import smart task parser
-from smart_task_parser import SmartTaskParser
+from .smart_task_parser import SmartTaskParser
 
 # Initialize FastMCP server
 mcp = FastMCP("Smart-ToDo MCP Server")

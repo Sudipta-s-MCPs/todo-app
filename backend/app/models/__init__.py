@@ -6,7 +6,7 @@ from app.models.user import (
 )
 from app.models.workspace import (
     Workspace, WorkspaceMember, List,
-    WorkspaceType, WorkspaceRole, ListType
+    WorkspaceType, WorkspaceRole
 )
 from app.models.task import (
     Task, TaskAssignment, TaskModification, TaskComment, TaskAttachment,
@@ -29,7 +29,7 @@ __all__ = [
     
     # Workspace models
     "Workspace", "WorkspaceMember", "List",
-    "WorkspaceType", "WorkspaceRole", "ListType",
+    "WorkspaceType", "WorkspaceRole",
     
     # Task models
     "Task", "TaskAssignment", "TaskModification", "TaskComment", "TaskAttachment",

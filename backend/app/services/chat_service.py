@@ -4,13 +4,14 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_, desc
+from sqlalchemy import select, func, and_, desc, or_
 
 from app.services.ai_service import get_ai_service
 from app.services.cache import get_redis_client
 from app.models.user import User
 from app.models.task import Task
-from app.models.workspace import Workspace, List
+from app.models.workspace import Workspace, List, WorkspaceMember
+from typing import List as TypingList
 from app.models.chat import ChatMessage
 from app.models.settings import SystemSetting
 from app.schemas.task import TaskCreate
@@ -24,12 +25,7 @@ class ChatService:
     """Service for handling chat interactions with hybrid approach."""
     
     PATTERN_COMMANDS = {
-        # Task creation patterns
-        r"^(create|add|new)\s+(a\s+)?task\s+(.+)$": "create_task",
-        r"^remind\s+me\s+to\s+(.+)$": "create_task",
-        r"^todo:\s*(.+)$": "create_task",
-        
-        # Task listing patterns
+        # Task listing patterns (not task creation)
         r"^(show|list|get)\s+(my\s+)?(all\s+)?tasks?$": "list_tasks",
         r"^what\s+(tasks?\s+)?do\s+i\s+have\??$": "list_tasks",
         r"^(show|list)\s+tasks?\s+in\s+(.+)$": "list_workspace_tasks",
@@ -96,43 +92,48 @@ class ChatService:
         db.add(user_message)
         await db.commit()
         
-        # Check for pattern match first
-        command_result = await self._try_pattern_match(content, user_id, db)
-        if command_result:
-            # Save assistant response
-            assistant_message = ChatMessage(
-                user_id=user_id,
-                content=command_result["response"],
-                sender="assistant",
-                message_metadata={
-                    "type": command_result.get("type", "success"),
-                    "usedAI": False,
-                    "action": command_result.get("action")
-                }
-            )
-            db.add(assistant_message)
-            await db.commit()
-            await db.refresh(assistant_message)
-            
-            # Clean up old messages
-            await self._cleanup_old_messages(user_id, db)
-            
-            return {
-                "message": {
-                    "id": str(assistant_message.id),
-                    "content": assistant_message.content,
-                    "sender": "assistant",
-                    "timestamp": assistant_message.created_at,
-                    "metadata": assistant_message.message_metadata
-                },
-                "conversationId": conversation_id or str(uuid.uuid4()),
-                "tasks": [self._serialize_task(t) for t in command_result.get("tasks", [])] if command_result.get("tasks") else None,
-                "action": command_result.get("action"),
-                "usedAI": False
-            }
-        
-        # Use AI for natural language task creation
+        # Check if this looks like a task creation request
         looks_like_task = await self._looks_like_task_creation(content)
+        
+        # For non-task commands (help, list tasks, etc.), use pattern matching
+        if not looks_like_task:
+            command_result = await self._try_pattern_match(content, user_id, db)
+            if command_result:
+                # Save assistant response
+                assistant_message = ChatMessage(
+                    user_id=user_id,
+                    content=command_result["response"],
+                    sender="assistant",
+                    message_metadata={
+                        "type": command_result.get("type", "success"),
+                        "usedAI": False,
+                        "action": command_result.get("action"),
+                        "provider": "pattern_match"
+                    }
+                )
+                db.add(assistant_message)
+                await db.commit()
+                await db.refresh(assistant_message)
+                
+                # Clean up old messages
+                await self._cleanup_old_messages(user_id, db)
+                
+                return {
+                    "message": {
+                        "id": str(assistant_message.id),
+                        "content": assistant_message.content,
+                        "sender": "assistant",
+                        "timestamp": assistant_message.created_at,
+                        "metadata": assistant_message.message_metadata
+                    },
+                    "conversationId": conversation_id or str(uuid.uuid4()),
+                    "tasks": [self._serialize_task(t) for t in command_result.get("tasks", [])] if command_result.get("tasks") else None,
+                    "action": command_result.get("action"),
+                    "usedAI": False,
+                    "provider": "pattern_match"
+                }
+        
+        # For task creation, try AI first
         logger.info(f"Task detection for '{content}': {looks_like_task}")
         
         if looks_like_task:
@@ -148,7 +149,8 @@ class ChatService:
                     "type": ai_result.get("type", "task"),
                     "usedAI": True,
                     "confidence": ai_result.get("confidence"),
-                    "action": "create_task"
+                    "action": "created" if ai_result.get("tasks") else "analyzed",
+                    "provider": ai_result.get("provider", "unknown")
                 }
             )
             db.add(assistant_message)
@@ -168,8 +170,9 @@ class ChatService:
                 },
                 "conversationId": conversation_id or str(uuid.uuid4()),
                 "tasks": [self._serialize_task(t) for t in ai_result.get("tasks", [])] if ai_result.get("tasks") else None,
-                "action": "create_task",
-                "usedAI": True
+                "action": "created" if ai_result.get("tasks") else "analyzed",
+                "usedAI": True,
+                "provider": ai_result.get("provider", "unknown")
             }
         
         # Default response for unrecognized input
@@ -180,7 +183,8 @@ class ChatService:
             sender="assistant",
             message_metadata={
                 "type": "error",
-                "usedAI": False
+                "usedAI": False,
+                "provider": "none"
             }
         )
         db.add(assistant_message)
@@ -199,7 +203,8 @@ class ChatService:
                 "metadata": assistant_message.message_metadata
             },
             "conversationId": conversation_id or str(uuid.uuid4()),
-            "usedAI": False
+            "usedAI": False,
+            "provider": "none"
         }
     
     async def _try_pattern_match(
@@ -222,29 +227,74 @@ class ChatService:
     
     async def _looks_like_task_creation(self, content: str) -> bool:
         """Check if content looks like a natural language task creation."""
-        # Keywords that suggest task creation
-        task_keywords = [
-            "need to", "have to", "should", "must", "remember",
-            "don't forget", "make sure", "plan to", "want to",
-            "tomorrow", "today", "next week", "by", "deadline",
-            "urgent", "important", "asap", "priority",
-            "meeting", "appointment", "call", "conference", "session",
-            "remind", "schedule", "plan", "organize", "arrange",
-            "at", "pm", "am", "o'clock", "time", "due"
-        ]
+        # Minimum word count - very short messages are usually not tasks
+        words = content.split()
+        if len(words) < 3:
+            logger.debug(f"Task detection: FALSE - too short ({len(words)} words)")
+            return False
         
         content_lower = content.lower()
-        logger.debug(f"Task detection debug - content_lower: '{content_lower}'")
         
-        # Check for task-like keywords
-        found_keywords = [kw for kw in task_keywords if kw in content_lower]
-        logger.debug(f"Task detection debug - found keywords: {found_keywords}")
+        # Exclude common non-task phrases
+        non_task_phrases = [
+            "what tasks", "show tasks", "list tasks", "my tasks",
+            "how many", "help", "hello", "hi", "thanks", "thank you",
+            "what can you", "how do i", "what is", "who is", "where is",
+            "when is", "why", "please explain", "tell me", "show me"
+        ]
         
-        if found_keywords:
-            logger.debug("Task detection: MATCHED by keywords")
+        for phrase in non_task_phrases:
+            if phrase in content_lower:
+                logger.debug(f"Task detection: FALSE - contains non-task phrase '{phrase}'")
+                return False
+        
+        # Direct task creation commands
+        task_creation_patterns = [
+            r"^(create|add|new)\s+(a\s+)?task\b",
+            r"^remind\s+me\s+to\b",
+            r"^todo:\s*",
+            r"^task:\s*"
+        ]
+        
+        import re
+        for pattern in task_creation_patterns:
+            if re.match(pattern, content_lower):
+                logger.debug(f"Task detection: TRUE - matches creation pattern '{pattern}'")
+                return True
+        
+        # Keywords that strongly suggest task creation
+        strong_task_keywords = [
+            "need to", "have to", "should", "must", "remember to",
+            "don't forget to", "make sure to", "remind me to"
+        ]
+        
+        # Check for strong task indicators
+        for keyword in strong_task_keywords:
+            if keyword in content_lower:
+                logger.debug(f"Task detection: TRUE - strong keyword '{keyword}'")
+                return True
+        
+        # Keywords that might suggest task creation (need more context)
+        weak_task_keywords = [
+            "tomorrow", "today", "next week", "by", "deadline",
+            "urgent", "important", "asap", "priority",
+            "meeting", "appointment", "call", "schedule", "fix", "update",
+            "workspace", "project"
+        ]
+        
+        # Count weak keywords - need at least 2 for a match
+        found_weak_keywords = [kw for kw in weak_task_keywords if kw in content_lower]
+        if len(found_weak_keywords) >= 2:
+            logger.debug(f"Task detection: TRUE - multiple weak keywords {found_weak_keywords}")
             return True
         
-        # Check for imperative mood (starts with verb)
+        # Check for time-based patterns (e.g., "at 3pm", "by 5:00")
+        time_pattern = r'\b(at|by|before|after)\s+\d{1,2}(:\d{2})?\s*(am|pm)?\b'
+        if re.search(time_pattern, content_lower):
+            logger.debug("Task detection: TRUE - contains time pattern")
+            return True
+        
+        # Check for imperative mood (starts with action verb)
         first_word = content_lower.split()[0] if content.split() else ""
         imperative_verbs = [
             "buy", "get", "call", "email", "send", "write", "read",
@@ -272,11 +322,33 @@ class ChatService:
     ) -> Dict[str, Any]:
         """Process natural language with AI to create tasks."""
         try:
-            # Get user's workspaces for context
-            workspaces = await db.execute(
-                select(Workspace).where(Workspace.owner_id == user_id)
+            # Get user's workspaces for context (both owned and member)
+            owned_workspaces = await db.execute(
+                select(Workspace).where(
+                    and_(
+                        Workspace.owner_id == user_id,
+                        Workspace.is_active == True
+                    )
+                )
             )
-            workspaces = workspaces.scalars().all()
+            owned_workspaces = owned_workspaces.scalars().all()
+            
+            # Get workspaces where user is a member
+            member_workspaces = await db.execute(
+                select(Workspace).join(WorkspaceMember).where(
+                    and_(
+                        WorkspaceMember.user_id == user_id,
+                        Workspace.is_active == True
+                    )
+                )
+            )
+            member_workspaces = member_workspaces.scalars().all()
+            
+            # Combine and deduplicate
+            workspace_dict = {w.id: w for w in owned_workspaces}
+            for w in member_workspaces:
+                workspace_dict[w.id] = w
+            workspaces = list(workspace_dict.values())
             
             # Get lists for context
             lists = []
@@ -286,15 +358,16 @@ class ChatService:
                 )
                 for lst in workspace_lists.scalars():
                     lists.append({
-                        "id": lst.id,
+                        "id": str(lst.id),
                         "name": lst.name,
+                        "workspace_id": str(workspace.id),
                         "workspace_name": workspace.name
                     })
             
             # Parse task with AI
             analysis = await get_ai_service().parse_natural_task(
                 content, 
-                [{"id": w.id, "name": w.name} for w in workspaces],
+                [{"id": str(w.id), "name": w.name} for w in workspaces],
                 lists,
                 user_id
             )
@@ -302,25 +375,32 @@ class ChatService:
             if not analysis.suggested_title:
                 return {
                     "response": "I couldn't understand that as a task. Could you rephrase it?",
-                    "type": "error"
+                    "type": "error",
+                    "provider": analysis.provider_used or "unknown"
                 }
             
-            # Find the workspace by name or use default
+            # Use workspace ID from AI analysis or fallback
             workspace_id = None
-            if analysis.suggested_workspace:
-                workspace = next((w for w in workspaces if w.name.lower() == analysis.suggested_workspace.lower()), None)
-                if workspace:
-                    workspace_id = workspace.id
+            workspace_name = None
             
-            if not workspace_id and workspaces:
-                # Use personal workspace or first available
+            if analysis.suggested_workspace:  # This is now the workspace ID
+                workspace_id = analysis.suggested_workspace
+                workspace_name = analysis.suggested_workspace_name
+            else:
+                # Fallback to personal workspace or first available
                 personal_workspace = next((w for w in workspaces if w.type == "personal"), None)
-                workspace_id = personal_workspace.id if personal_workspace else workspaces[0].id
+                if personal_workspace:
+                    workspace_id = str(personal_workspace.id)
+                    workspace_name = personal_workspace.name
+                elif workspaces:
+                    workspace_id = str(workspaces[0].id)
+                    workspace_name = workspaces[0].name
             
             if not workspace_id:
                 return {
-                    "response": "No workspace found. Please create a workspace first.",
-                    "type": "error"
+                    "response": "I can't create a task because you don't have any workspaces yet. Please create a workspace first by going to the Workspaces page.",
+                    "type": "error",
+                    "provider": analysis.provider_used or "unknown"
                 }
             
             # Parse due date if provided
@@ -341,59 +421,84 @@ class ChatService:
                 tags=analysis.extracted_entities.get("projects", []) if analysis.extracted_entities else []
             )
             
-            # Get default list for workspace
-            default_list = await db.execute(
-                select(List).where(
-                    and_(
-                        List.workspace_id == workspace_id,
-                        List.is_default == True
+            # Determine list ID
+            list_id = None
+            list_name = None
+            
+            if analysis.suggested_list:  # This is now the list ID
+                list_id = analysis.suggested_list
+                list_name = analysis.suggested_list_name
+            else:
+                # Get default list for workspace
+                default_list = await db.execute(
+                    select(List).where(
+                        and_(
+                            List.workspace_id == uuid.UUID(workspace_id),
+                            List.is_default == True
+                        )
+                    ).limit(1)
+                )
+                default_list = default_list.scalar_one_or_none()
+                
+                if default_list:
+                    list_id = str(default_list.id)
+                    list_name = default_list.name
+                else:
+                    # Get any list from the workspace
+                    any_list = await db.execute(
+                        select(List).where(
+                            List.workspace_id == uuid.UUID(workspace_id)
+                        ).limit(1)
                     )
-                ).limit(1)
-            )
-            default_list = default_list.scalar_one_or_none()
+                    any_list = any_list.scalar_one_or_none()
+                    
+                    if any_list:
+                        list_id = str(any_list.id)
+                        list_name = any_list.name
+                    else:
+                        return {
+                            "response": "The workspace doesn't have any lists. Please create a list first in the workspace.",
+                            "type": "error",
+                            "provider": analysis.provider_used or "unknown"
+                        }
             
-            if not default_list:
-                return {
-                    "response": "No default list found in the workspace. Please create a list first.",
-                    "type": "error"
-                }
+            # Create task suggestion (not saved to database)
+            suggested_task = {
+                "title": analysis.suggested_title,
+                "description": analysis.extracted_entities.get("description") if analysis.extracted_entities else None,
+                "workspace_id": workspace_id,
+                "workspace_name": workspace_name or "Unknown",
+                "list_id": list_id,
+                "list_name": list_name or "Unknown",
+                "priority": analysis.suggested_priority or "medium",
+                "status": "todo",
+                "due_date": due_date.isoformat() if due_date else None,
+                "tags": analysis.extracted_entities.get("projects", []) if analysis.extracted_entities else [],
+                "suggested": True  # Flag to indicate this is a suggestion
+            }
             
-            # Create task directly
-            new_task = Task(
-                title=analysis.suggested_title,
-                description=analysis.extracted_entities.get("description") if analysis.extracted_entities else None,
-                list_id=default_list.id,
-                priority=analysis.suggested_priority or "medium",
-                status="todo",
-                due_date=due_date,
-                position=0,
-                created_by=user_id,
-                created_via_method="chat_ai",
-                task_metadata={"tags": analysis.extracted_entities.get("projects", []) if analysis.extracted_entities else []}
-            )
+            # Get workspace name for the response
+            workspace_name = suggested_task["workspace_name"]
             
-            db.add(new_task)
-            await db.commit()
-            await db.refresh(new_task)
-            
-            task = new_task
-            
-            # Get workspace name from the list's workspace
-            workspace_result = await db.execute(
-                select(Workspace).join(List).where(List.id == new_task.list_id)
-            )
-            workspace = workspace_result.scalar_one_or_none()
-            workspace_name = workspace.name if workspace else "Personal"
-            
-            response = f"✅ Created task: \"{task.title}\" in {workspace_name}"
-            if task.due_date:
-                response += f" (due {task.due_date.strftime('%b %d')})"
+            response = f"I'll help you create this task:\n\n"
+            response += f"**Task**: {suggested_task['title']}\n"
+            response += f"**Workspace**: {suggested_task['workspace_name']}\n"
+            response += f"**List**: {suggested_task['list_name']}\n"
+            if suggested_task['description']:
+                response += f"**Description**: {suggested_task['description']}\n"
+            if suggested_task['due_date']:
+                response += f"**Due Date**: {due_date.strftime('%b %d, %Y')}\n"
+            response += f"**Priority**: {suggested_task['priority'].capitalize()}\n"
+            response += f"\n*Powered by {analysis.provider_used}*\n"
+            response += "\nPlease review and approve this task in the preview panel. You can edit any details before creating it."
             
             return {
                 "response": response,
-                "type": "task",
-                "tasks": [self._serialize_task(task)],
-                "confidence": analysis.confidence if analysis else 0.9
+                "type": "task_suggestion",
+                "tasks": [suggested_task],  # Return as suggestion, not created task
+                "confidence": analysis.confidence if analysis else 0.9,
+                "provider": analysis.provider_used if analysis else "unknown",
+                "action": "suggested"  # Changed from "created" to "suggested"
             }
             
         except Exception as e:
@@ -408,7 +513,8 @@ class ChatService:
                     
                 return {
                     "response": "AI processing is currently unavailable. Please use simple commands like 'create task [title]' or contact your administrator to configure the AI service.",
-                    "type": "error"
+                    "type": "error",
+                    "provider": "none"
                 }
             
             # For other AI errors, try fallback
@@ -418,7 +524,8 @@ class ChatService:
                 
             return {
                 "response": "I had trouble understanding that. Please try rephrasing or use a simple command like 'create task [title]'.",
-                "type": "error"
+                "type": "error",
+                "provider": "failed"
             }
     
     async def _fallback_task_creation(
@@ -429,16 +536,39 @@ class ChatService:
     ) -> Optional[Dict[str, Any]]:
         """Fallback task creation when AI is not available."""
         try:
-            # Get user's workspaces
-            workspaces = await db.execute(
-                select(Workspace).where(Workspace.owner_id == user_id)
+            # Get user's workspaces (both owned and member)
+            owned_workspaces = await db.execute(
+                select(Workspace).where(
+                    and_(
+                        Workspace.owner_id == user_id,
+                        Workspace.is_active == True
+                    )
+                )
             )
-            workspaces = workspaces.scalars().all()
+            owned_workspaces = owned_workspaces.scalars().all()
+            
+            # Get workspaces where user is a member
+            member_workspaces = await db.execute(
+                select(Workspace).join(WorkspaceMember).where(
+                    and_(
+                        WorkspaceMember.user_id == user_id,
+                        Workspace.is_active == True
+                    )
+                )
+            )
+            member_workspaces = member_workspaces.scalars().all()
+            
+            # Combine and deduplicate
+            workspace_dict = {w.id: w for w in owned_workspaces}
+            for w in member_workspaces:
+                workspace_dict[w.id] = w
+            workspaces = list(workspace_dict.values())
             
             if not workspaces:
                 return {
-                    "response": "No workspace found. Please create a workspace first, then try: 'create task [your task title]'",
-                    "type": "error"
+                    "response": "I can't create a task because you don't have any workspaces yet. Please go to the Workspaces page and create your first workspace.",
+                    "type": "error",
+                    "provider": "none"
                 }
             
             # Simple task title extraction
@@ -461,18 +591,20 @@ class ChatService:
             default_list = default_list.scalar_one_or_none()
             
             if not default_list:
-                # Create a default list if none exists
-                default_list = List(
-                    workspace_id=workspace.id,
-                    name="Tasks",
-                    type="default",
-                    is_default=True,
-                    color="#2196F3",
-                    position=0
+                # Try to get any list from workspace
+                any_list = await db.execute(
+                    select(List).where(
+                        List.workspace_id == workspace.id
+                    ).limit(1)
                 )
-                db.add(default_list)
-                await db.commit()
-                await db.refresh(default_list)
+                default_list = any_list.scalar_one_or_none()
+                
+                if not default_list:
+                    return {
+                        "response": f"The workspace '{workspace.name}' doesn't have any lists. Please create a list first in the workspace.",
+                        "type": "error",
+                        "provider": "none"
+                    }
             
             # Create task
             task = Task(
@@ -503,22 +635,53 @@ class ChatService:
         """Simple task title extraction for fallback."""
         content = content.strip()
         
+        # Remove workspace references
+        import re
+        content = re.sub(r'\b(in|at|on|for)\s+\w+\s+workspace\b', '', content, flags=re.IGNORECASE)
+        content = re.sub(r'\bworkspace\s+\w+\b', '', content, flags=re.IGNORECASE)
+        
         # Remove common prefixes
         prefixes_to_remove = [
             "schedule ", "plan ", "remind me to ", "i need to ", "todo: ",
-            "task: ", "create task ", "add task ", "new task "
+            "task: ", "create task ", "add task ", "new task ", "to "
         ]
         
         content_lower = content.lower()
         for prefix in prefixes_to_remove:
             if content_lower.startswith(prefix):
                 content = content[len(prefix):].strip()
-                break
+                content_lower = content.lower()
         
-        # Clean up the title
+        # Clean up the title - remove extra spaces and capitalize
+        content = ' '.join(content.split())
         if content and len(content) > 2:
+            # Capitalize first letter
+            content = content[0].upper() + content[1:]
             return content[:100]  # Limit length
             
+        return None
+    
+    def _extract_workspace_from_text(self, text: str, workspaces: TypingList[Workspace]) -> Optional[Workspace]:
+        """Extract workspace name from text and match against available workspaces."""
+        import re
+        text_lower = text.lower()
+        
+        # Try to find workspace mentions
+        patterns = [
+            r'\b(?:in|at|on|for)\s+(\w+(?:\s+\w+)?)\s+workspace\b',
+            r'\bworkspace\s+(\w+(?:\s+\w+)?)\b',
+            r'\b(?:in|at)\s+(\w+(?:\s+\w+)?)\b(?=\s+(?:to|for|about))'
+        ]
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, text_lower)
+            for match in matches:
+                # Try to match against available workspaces
+                for workspace in workspaces:
+                    if workspace.name.lower() == match.lower() or \
+                       workspace.name.lower().replace(' ', '') == match.lower().replace(' ', ''):
+                        return workspace
+        
         return None
     
     async def _handle_create_task(
@@ -539,30 +702,40 @@ class ChatService:
         
         task_title = task_title.strip()
         
-        # Get default workspace
-        workspace = await db.execute(
+        # Get user's workspaces (prefer personal workspace)
+        owned_workspaces = await db.execute(
             select(Workspace).where(
                 and_(
                     Workspace.owner_id == user_id,
-                    Workspace.type == "personal"
+                    Workspace.is_active == True
                 )
-            ).limit(1)
+            )
         )
-        workspace = workspace.scalar_one_or_none()
+        owned_workspaces = owned_workspaces.scalars().all()
+        
+        # Get workspaces where user is a member
+        member_workspaces = await db.execute(
+            select(Workspace).join(WorkspaceMember).where(
+                and_(
+                    WorkspaceMember.user_id == user_id,
+                    Workspace.is_active == True
+                )
+            )
+        )
+        member_workspaces = member_workspaces.scalars().all()
+        
+        # Combine and find personal workspace first
+        all_workspaces = owned_workspaces + member_workspaces
+        workspace = next((w for w in all_workspaces if w.type == "personal"), None)
+        if not workspace and all_workspaces:
+            workspace = all_workspaces[0]
         
         if not workspace:
             return {
-                "response": "No workspace found. Please create a workspace first.",
+                "response": "I can't create a task because you don't have any workspaces yet. Please go to the Workspaces page and create your first workspace.",
                 "type": "error",
                 "action": "create_task"
             }
-        
-        # Create task
-        task_data = TaskCreate(
-            title=task_title,
-            workspace_id=workspace.id,
-            priority="medium"
-        )
         
         # Get default list for workspace
         default_list = await db.execute(
@@ -580,7 +753,6 @@ class ChatService:
             default_list = List(
                 workspace_id=workspace.id,
                 name="Tasks",
-                type="default",
                 is_default=True,
                 color="#2196F3",
                 position=0
@@ -589,26 +761,38 @@ class ChatService:
             await db.commit()
             await db.refresh(default_list)
         
-        # Create task directly
-        task = Task(
-            title=task_title,
-            list_id=default_list.id,
-            priority="medium",
-            status="todo",
-            position=0,
-            created_by=user_id,
-            created_via_method="chat_pattern"
-        )
+        # Extract workspace from task title if mentioned
+        workspace_mentioned = self._extract_workspace_from_text(task_title, all_workspaces)
+        if workspace_mentioned:
+            workspace = workspace_mentioned
+            # Clean the title to remove workspace reference
+            task_title = self._extract_task_title_simple(task_title)
         
-        db.add(task)
-        await db.commit()
-        await db.refresh(task)
+        # Create task suggestion (not saved to database)
+        suggested_task = {
+            "title": task_title,
+            "description": None,
+            "workspace_id": str(workspace.id),
+            "workspace_name": workspace.name,
+            "list_id": str(default_list.id),
+            "priority": "medium",
+            "status": "todo",
+            "due_date": None,
+            "tags": [],
+            "suggested": True  # Flag to indicate this is a suggestion
+        }
+        
+        response = f"I'll help you create this task:\n\n"
+        response += f"**Task**: {task_title}\n"
+        response += f"**Workspace**: {workspace.name}\n"
+        response += f"**Priority**: Medium\n"
+        response += "\nPlease review and approve this task in the preview panel. You can edit any details before creating it."
         
         return {
-            "response": f"✅ Created task: \"{task.title}\"",
-            "type": "task",
-            "action": "create_task",
-            "tasks": [self._serialize_task(task)]
+            "response": response,
+            "type": "task_suggestion",
+            "action": "suggest_task",
+            "tasks": [suggested_task]
         }
     
     async def _handle_list_tasks(

@@ -3,7 +3,6 @@ Vector Database Service using Qdrant
 Created: 2025-01-02 08:00:00 PST
 """
 
-import os
 import json
 from typing import List, Dict, Any, Optional, Tuple
 from uuid import UUID
@@ -12,6 +11,7 @@ import asyncio
 
 from app.utils.logging import get_logger
 from app.services.cache import get_redis_client
+from app.services.dynamic_settings import dynamic_settings
 
 logger = get_logger(__name__)
 
@@ -41,11 +41,11 @@ class VectorService:
     """Service for managing task embeddings in Qdrant"""
     
     def __init__(self):
-        self.host = os.getenv("QDRANT_HOST", "localhost")
-        self.port = int(os.getenv("QDRANT_PORT", "6333"))
-        self.api_key = os.getenv("QDRANT_API_KEY") or None
-        self.collection_name = os.getenv("QDRANT_COLLECTION_NAME", "smart_todo_tasks")
-        self.embedding_model_name = os.getenv("QDRANT_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+        self.host = dynamic_settings.QDRANT_HOST or "localhost"
+        self.port = dynamic_settings.QDRANT_PORT
+        self.api_key = dynamic_settings.QDRANT_API_KEY or None
+        self.collection_name = dynamic_settings.QDRANT_COLLECTION_NAME
+        self.embedding_model_name = dynamic_settings.QDRANT_EMBEDDING_MODEL
         
         # Check if dependencies are available
         if not QDRANT_AVAILABLE or not SENTENCE_TRANSFORMERS_AVAILABLE:

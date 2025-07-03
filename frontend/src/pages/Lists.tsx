@@ -19,9 +19,8 @@ import {
   Stack,
   Menu,
   MenuItem,
-  FormControl,
-  InputLabel,
-  Select,
+  FormControlLabel,
+  Switch,
 } from '@mui/material';
 import {
   Add as AddIcon,
@@ -48,9 +47,9 @@ export default function Lists() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingList, setEditingList] = useState<List | null>(null);
   const [listName, setListName] = useState('');
-  const [listType, setListType] = useState<'default' | 'smart' | 'custom'>('default');
   const [listIcon, setListIcon] = useState('📋');
   const [listColor, setListColor] = useState('#3f51b5');
+  const [isDefault, setIsDefault] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
   const [selectedList, setSelectedList] = useState<List | null>(null);
 
@@ -115,15 +114,15 @@ export default function Lists() {
     if (list) {
       setEditingList(list);
       setListName(list.name);
-      setListType(list.type);
       setListIcon(list.icon || '📋');
       setListColor(list.color || '#3f51b5');
+      setIsDefault(list.is_default || false);
     } else {
       setEditingList(null);
       setListName('');
-      setListType('default');
       setListIcon('📋');
       setListColor('#3f51b5');
+      setIsDefault(false);
     }
     setDialogOpen(true);
   };
@@ -132,9 +131,9 @@ export default function Lists() {
     setDialogOpen(false);
     setEditingList(null);
     setListName('');
-    setListType('default');
     setListIcon('📋');
     setListColor('#3f51b5');
+    setIsDefault(false);
   };
 
   const handleSaveList = async () => {
@@ -145,9 +144,9 @@ export default function Lists() {
 
     const data = {
       name: listName.trim(),
-      type: listType,
       icon: listIcon,
       color: listColor,
+      is_default: isDefault,
     };
 
     if (editingList) {
@@ -233,9 +232,6 @@ export default function Lists() {
                         <Chip label="Default" size="small" color="primary" />
                       )}
                     </Typography>
-                    <Typography variant="body2" color="text.secondary" mt={1}>
-                      Type: {list.type}
-                    </Typography>
                     <Typography variant="body2" color="text.secondary">
                       {list.task_count || 0} tasks
                     </Typography>
@@ -284,18 +280,21 @@ export default function Lists() {
               autoFocus
             />
 
-            <FormControl fullWidth>
-              <InputLabel>List Type</InputLabel>
-              <Select
-                value={listType}
-                onChange={(e) => setListType(e.target.value as 'default' | 'smart' | 'custom')}
-                label="List Type"
-              >
-                <MenuItem value="default">Default</MenuItem>
-                <MenuItem value="smart">Smart</MenuItem>
-                <MenuItem value="custom">Custom</MenuItem>
-              </Select>
-            </FormControl>
+            <Box>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={isDefault}
+                    onChange={(e) => setIsDefault(e.target.checked)}
+                    disabled={editingList?.is_default}
+                  />
+                }
+                label="Set as default list for this workspace"
+              />
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ ml: 2 }}>
+                Tasks created by AI will use the default list when no specific list is mentioned
+              </Typography>
+            </Box>
 
             <TextField
               label="Icon (Emoji)"

@@ -29,10 +29,6 @@ class WorkspaceRole(str, enum.Enum):
     VIEWER = "viewer"
 
 
-class ListType(str, enum.Enum):
-    DEFAULT = "default"
-    SMART = "smart"
-    ARCHIVED = "archived"
 
 
 class Workspace(Base):
@@ -83,7 +79,6 @@ class List(Base):
     color = Column(String(7), default="#000000")
     icon = Column(String(50), nullable=True)
     
-    type = Column(SQLEnum(ListType), default=ListType.DEFAULT, nullable=False)
     position = Column(Integer, default=0)
     settings_json = Column(JSON, default=dict)
     

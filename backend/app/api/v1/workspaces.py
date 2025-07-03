@@ -7,11 +7,11 @@ from typing import List as TypingList, Optional
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_, or_
+from sqlalchemy import select, func, and_, or_, update
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.models.workspace import Workspace, WorkspaceMember, List, WorkspaceType, WorkspaceRole, ListType
+from app.models.workspace import Workspace, WorkspaceMember, List, WorkspaceType, WorkspaceRole
 from app.models.user import User
 from app.models.task import Task, TaskStatus
 from app.models.activity import ActionType, ResourceType
@@ -93,12 +93,21 @@ async def create_workspace(
     db: AsyncSession = Depends(get_db)
 ):
     """Create a new workspace"""
+    # Prepare settings with additional fields
+    settings = workspace_data.settings.copy() if workspace_data.settings else {}
+    if workspace_data.description:
+        settings["description"] = workspace_data.description
+    if workspace_data.emoji:
+        settings["emoji"] = workspace_data.emoji
+    if workspace_data.color:
+        settings["color"] = workspace_data.color
+    
     # Create workspace
     workspace = Workspace(
         name=workspace_data.name,
         type=workspace_data.type,
         owner_id=current_user.id,
-        settings_json=workspace_data.settings
+        settings_json=settings
     )
     db.add(workspace)
     await db.flush()
@@ -107,7 +116,6 @@ async def create_workspace(
     default_list = List(
         workspace_id=workspace.id,
         name="General",
-        type=ListType.DEFAULT,
         is_default=True
     )
     db.add(default_list)
@@ -266,8 +274,23 @@ async def update_workspace(
     # Update fields
     if workspace_data.name is not None:
         workspace.name = workspace_data.name
+    
+    # Handle settings updates
+    settings = workspace.settings_json.copy() if workspace.settings_json else {}
+    
+    # Update explicit fields in settings
+    if workspace_data.description is not None:
+        settings["description"] = workspace_data.description
+    if workspace_data.emoji is not None:
+        settings["emoji"] = workspace_data.emoji
+    if workspace_data.color is not None:
+        settings["color"] = workspace_data.color
+    
+    # Merge with any additional settings provided
     if workspace_data.settings is not None:
-        workspace.settings_json = workspace_data.settings
+        settings.update(workspace_data.settings)
+    
+    workspace.settings_json = settings
     
     # Log activity
     access_method, device_id, session_id, _, _ = await get_access_info_direct(
@@ -485,15 +508,23 @@ async def create_list(
         workspace_id, current_user, db, WorkspaceRole.MEMBER
     )
     
+    # If this is set as default, unset other defaults in the workspace
+    if list_data.is_default:
+        await db.execute(
+            update(List).where(
+                List.workspace_id == workspace_id
+            ).values(is_default=False)
+        )
+    
     # Create list
     new_list = List(
         workspace_id=workspace_id,
         name=list_data.name,
         color=list_data.color,
         icon=list_data.icon,
-        type=list_data.type,
         position=list_data.position,
-        settings_json=list_data.settings
+        settings_json=list_data.settings,
+        is_default=list_data.is_default
     )
     db.add(new_list)
     
@@ -571,3 +602,86 @@ async def list_workspace_lists(
         responses.append(response)
     
     return responses
+
+
+@router.put("/{workspace_id}/lists/{list_id}", response_model=ListResponse)
+async def update_list(
+    workspace_id: UUID,
+    list_id: UUID,
+    request: Request,
+    list_data: ListUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Update a list in workspace"""
+    workspace, role = await get_workspace_with_permissions(
+        workspace_id, current_user, db, WorkspaceRole.MEMBER
+    )
+    
+    # Get list
+    result = await db.execute(
+        select(List).where(
+            and_(
+                List.id == list_id,
+                List.workspace_id == workspace_id
+            )
+        )
+    )
+    lst = result.scalar_one_or_none()
+    
+    if not lst:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="List not found"
+        )
+    
+    # If setting as default, unset other defaults
+    if list_data.is_default:
+        await db.execute(
+            update(List).where(
+                and_(
+                    List.workspace_id == workspace_id,
+                    List.id != list_id
+                )
+            ).values(is_default=False)
+        )
+    
+    # Update fields
+    update_data = list_data.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        if field == "settings":
+            setattr(lst, "settings_json", value)
+        else:
+            setattr(lst, field, value)
+    
+    # Log activity
+    access_method, device_id, session_id, _, _ = await get_access_info_direct(
+        request, db
+    )
+    await log_activity(
+        db=db,
+        user_id=current_user.id,
+        action_type=ActionType.LIST_UPDATE.value,
+        resource_type=ResourceType.LIST,
+        resource_id=list_id,
+        device_id=device_id,
+        session_id=session_id,
+        access_method=access_method,
+        ip_address=request.client.host,
+        user_agent=request.headers.get("User-Agent"),
+        details={"workspace_id": str(workspace_id), "updates": update_data}
+    )
+    
+    await db.commit()
+    await db.refresh(lst)
+    
+    # Get task count
+    result = await db.execute(
+        select(func.count(Task.id))
+        .where(Task.list_id == list_id)
+    )
+    task_count = result.scalar()
+    
+    response = ListResponse.model_validate(lst)
+    response.task_count = task_count
+    return response

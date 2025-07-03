@@ -19,6 +19,7 @@ from app.api.deps import get_current_user, get_current_admin_user, is_admin_user
 from app.schemas.auth import UserInfo
 from app.schemas.admin import UserAdminCreate, UserAdminUpdate
 from app.utils.security import get_password_hash
+from app.services.email_service import email_service
 
 router = APIRouter()
 
@@ -252,6 +253,130 @@ async def toggle_user_active_status(
         "email": user.email,
         "is_active": user.is_active,
         "message": f"User {'activated' if user.is_active else 'deactivated'} successfully"
+    }
+
+
+@router.patch("/users/{user_id}/approve", response_model=Dict[str, Any])
+async def approve_user(
+    user_id: str,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Approve a pending user"""
+    
+    # Get the user
+    user = await db.get(User, user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    if user.approval_status == "approved":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User is already approved"
+        )
+    
+    # Approve the user
+    user.approval_status = "approved"
+    user.approved_at = datetime.utcnow()
+    user.approved_by = admin.id
+    await db.commit()
+    
+    # Log activity
+    activity = ActivityLog(
+        user_id=admin.id,
+        action_type=ActionType.USER_UPDATE.value,
+        resource_type="user",
+        resource_id=str(user.id),
+        access_method=AccessMethod.WEB.value,
+        details={
+            "action": "approve_user",
+            "target_email": user.email
+        }
+    )
+    db.add(activity)
+    await db.commit()
+    
+    # Send approval email
+    await email_service.send_approval_email(
+        user_email=user.email,
+        user_name=user.name,
+        approved=True,
+        db=db
+    )
+    
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "approval_status": user.approval_status,
+        "message": "User approved successfully"
+    }
+
+
+@router.patch("/users/{user_id}/reject", response_model=Dict[str, Any])
+async def reject_user(
+    user_id: str,
+    rejection_data: Dict[str, str],
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Reject a pending user"""
+    
+    # Get the user
+    user = await db.get(User, user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    if user.approval_status == "rejected":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User is already rejected"
+        )
+    
+    # Reject the user
+    user.approval_status = "rejected"
+    user.approved_at = datetime.utcnow()
+    user.approved_by = admin.id
+    user.rejection_reason = rejection_data.get("reason", "Not specified")
+    await db.commit()
+    
+    # Log activity
+    activity = ActivityLog(
+        user_id=admin.id,
+        action_type=ActionType.USER_UPDATE.value,
+        resource_type="user",
+        resource_id=str(user.id),
+        access_method=AccessMethod.WEB.value,
+        details={
+            "action": "reject_user",
+            "target_email": user.email,
+            "reason": user.rejection_reason
+        }
+    )
+    db.add(activity)
+    await db.commit()
+    
+    # Send rejection email
+    await email_service.send_approval_email(
+        user_email=user.email,
+        user_name=user.name,
+        approved=False,
+        rejection_reason=user.rejection_reason,
+        db=db
+    )
+    
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "is_approved": user.is_approved,
+        "approval_status": user.approval_status,
+        "rejection_reason": user.rejection_reason,
+        "message": "User rejected"
     }
 
 

@@ -60,8 +60,8 @@ export default function Register() {
         locale: navigator.language,
       });
       
-      enqueueSnackbar('Account created successfully! Please sign in.', { 
-        variant: 'success' 
+      enqueueSnackbar('Account created successfully! Your account is pending approval. You will receive an email once approved.', { 
+        variant: 'info' 
       });
       navigate('/login');
     } catch (error: any) {

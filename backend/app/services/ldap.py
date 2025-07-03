@@ -43,21 +43,21 @@ class LDAPService:
         self.server = None
         self.bind_connection = None
         self.executor = ThreadPoolExecutor(max_workers=5)
-        # Dynamic configuration from database
-        self.ldap_enabled = settings.LDAP_ENABLED
-        self.ldap_server = settings.LDAP_SERVER
-        self.ldap_port = settings.LDAP_PORT
-        self.ldap_use_ssl = settings.LDAP_USE_SSL
-        self.ldap_start_tls = settings.LDAP_START_TLS
-        self.ldap_bind_dn = settings.LDAP_BIND_DN
-        self.ldap_bind_password = settings.LDAP_BIND_PASSWORD
-        self.ldap_base_dn = settings.LDAP_BASE_DN
-        self.ldap_user_search_base = settings.LDAP_USER_SEARCH_BASE
-        self.ldap_user_filter = settings.LDAP_USER_FILTER
-        self.ldap_user_attr_email = settings.LDAP_USER_ATTR_EMAIL
-        self.ldap_user_attr_name = settings.LDAP_USER_ATTR_NAME
-        self.ldap_user_attr_uid = settings.LDAP_USER_ATTR_UID
-        self._initialize_server()
+        # Initialize with defaults - will be updated from database
+        self.ldap_enabled = False
+        self.ldap_server = ""
+        self.ldap_port = 389
+        self.ldap_use_ssl = False
+        self.ldap_start_tls = False
+        self.ldap_bind_dn = None
+        self.ldap_bind_password = None
+        self.ldap_base_dn = ""
+        self.ldap_user_search_base = ""
+        self.ldap_user_filter = "(objectClass=inetOrgPerson)"
+        self.ldap_user_attr_email = "mail"
+        self.ldap_user_attr_name = "displayName"
+        self.ldap_user_attr_uid = "uid"
+        # Don't initialize server here - wait for config to be loaded
     
     def update_config(self, config_dict: Dict[str, Any]):
         """Update LDAP configuration from database settings"""
@@ -74,6 +74,27 @@ class LDAPService:
         self.ldap_user_attr_email = config_dict.get('ldap_user_attr_email', self.ldap_user_attr_email)
         self.ldap_user_attr_name = config_dict.get('ldap_user_attr_name', self.ldap_user_attr_name)
         self.ldap_user_attr_uid = config_dict.get('ldap_user_attr_uid', self.ldap_user_attr_uid)
+        # Reinitialize server with new config
+        self._initialize_server()
+    
+    def update_from_dynamic_settings(self):
+        """Update LDAP configuration from dynamic settings"""
+        from app.services.dynamic_settings import dynamic_settings
+        
+        self.ldap_enabled = dynamic_settings.LDAP_ENABLED
+        self.ldap_server = dynamic_settings.LDAP_SERVER
+        self.ldap_port = dynamic_settings.LDAP_PORT
+        self.ldap_use_ssl = dynamic_settings.LDAP_USE_SSL
+        self.ldap_start_tls = dynamic_settings.LDAP_START_TLS
+        self.ldap_bind_dn = dynamic_settings.LDAP_BIND_DN
+        self.ldap_bind_password = dynamic_settings.LDAP_BIND_PASSWORD
+        self.ldap_base_dn = dynamic_settings.LDAP_BASE_DN
+        self.ldap_user_search_base = dynamic_settings.LDAP_USER_SEARCH_BASE
+        self.ldap_user_filter = dynamic_settings.LDAP_USER_FILTER
+        self.ldap_user_attr_email = dynamic_settings.LDAP_USER_ATTR_EMAIL
+        self.ldap_user_attr_name = dynamic_settings.LDAP_USER_ATTR_NAME
+        self.ldap_user_attr_uid = dynamic_settings.LDAP_USER_ATTR_UID
+        
         # Reinitialize server with new config
         self._initialize_server()
     
@@ -452,7 +473,7 @@ async def create_user_from_ldap(ldap_info: LDAPUserInfo, db):
     email = ldap_info.email
     if not email or email == ldap_info.uid:
         # Create a pseudo-email for LDAP users without email
-        email = f"{ldap_info.uid}@{settings.LDAP_DEFAULT_DOMAIN if hasattr(settings, 'LDAP_DEFAULT_DOMAIN') else 'ldap.local'}"
+        email = f"{ldap_info.uid}@ldap.local"
     
     user = User(
         email=email,
@@ -463,6 +484,8 @@ async def create_user_from_ldap(ldap_info: LDAPUserInfo, db):
         external_id=ldap_info.uid,
         is_verified=True,  # LDAP users are pre-verified
         is_active=True,
+        approval_status="approved",  # LDAP users are automatically approved
+        approved_at=datetime.utcnow(),
         created_at=datetime.utcnow(),
         last_active_at=datetime.utcnow()
     )

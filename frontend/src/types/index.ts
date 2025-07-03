@@ -47,7 +47,7 @@ export interface AuthResponse {
 export interface Workspace {
   id: string;
   name: string;
-  type: 'personal' | 'shared';
+  type: 'personal' | 'team' | 'org';
   owner_id: string;
   description?: string;
   emoji?: string;
@@ -63,7 +63,6 @@ export interface List {
   id: string;
   workspace_id: string;
   name: string;
-  type: 'default' | 'smart' | 'custom';
   is_default: boolean;
   icon?: string;
   color: string;
@@ -77,11 +76,11 @@ export interface List {
 
 export interface ListCreate {
   name: string;
-  type?: 'default' | 'smart' | 'custom';
   icon?: string;
   color?: string;
   position?: number;
   settings?: Record<string, any>;
+  is_default?: boolean;
 }
 
 export interface ListUpdate {
@@ -90,6 +89,7 @@ export interface ListUpdate {
   color?: string;
   position?: number;
   settings?: Record<string, any>;
+  is_default?: boolean;
 }
 
 // Task Types
@@ -212,6 +212,7 @@ export interface ChatMessage {
     confidence?: number;
     tasks?: Task[];
     action?: string;
+    provider?: string;
   };
 }
 
@@ -286,7 +287,7 @@ export interface DuplicateTaskError {
 export interface WorkspaceCreate {
   name: string;
   description?: string;
-  type?: 'personal' | 'shared';
+  type?: 'personal' | 'team' | 'org';
   emoji?: string;
   color?: string;
 }

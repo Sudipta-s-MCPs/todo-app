@@ -38,7 +38,7 @@ export default function Workspaces() {
   const user = useAuthStore((state) => state.user);
   
   // State
-  const [tab, setTab] = useState<'all' | 'personal' | 'shared'>('all');
+  const [tab, setTab] = useState<'all' | 'personal' | 'team'>('all');
   const [search, setSearch] = useState('');
   const [debouncedSearch] = useDebounce(search, 300);
   const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
@@ -161,7 +161,7 @@ export default function Workspaces() {
 
   const filteredWorkspaces = workspaces.filter((workspace) => {
     if (tab === 'personal' && workspace.type !== 'personal') return false;
-    if (tab === 'shared' && workspace.type !== 'shared') return false;
+    if (tab === 'team' && workspace.type !== 'team') return false;
     return true;
   });
 
@@ -203,7 +203,7 @@ export default function Workspaces() {
         <Tabs value={tab} onChange={(_, v) => setTab(v)}>
           <Tab label="All Workspaces" value="all" />
           <Tab label="Personal" value="personal" />
-          <Tab label="Shared" value="shared" />
+          <Tab label="Team" value="team" />
         </Tabs>
       </Box>
 
@@ -221,8 +221,8 @@ export default function Workspaces() {
               ? 'Try adjusting your search'
               : tab === 'personal'
               ? 'Create your personal workspace to get started'
-              : tab === 'shared'
-              ? 'Create or join a shared workspace'
+              : tab === 'team'
+              ? 'Create or join a team workspace'
               : 'Create your first workspace to organize your tasks'}
           </Typography>
           <Button variant="contained" startIcon={<AddIcon />} onClick={handleCreateWorkspace}>

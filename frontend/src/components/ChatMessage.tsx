@@ -22,6 +22,45 @@ export default function ChatMessage({ message, onTaskClick }: ChatMessageProps) 
   const { enqueueSnackbar } = useSnackbar();
   const isUser = message.sender === 'user';
 
+  const getProviderDisplayName = (provider: string) => {
+    switch (provider) {
+      case 'huggingface': return 'HuggingFace';
+      case 'gemini': return 'Gemini';
+      case 'groq': return 'Groq';
+      case 'pattern_match': return 'Pattern Match';
+      case 'none': return 'No AI';
+      case 'failed': return 'AI Failed';
+      case 'unknown': return 'Unknown';
+      default: return provider;
+    }
+  };
+
+  const getProviderIcon = (provider: string) => {
+    switch (provider) {
+      case 'huggingface': return <span style={{ fontSize: '14px' }}>🤗</span>;
+      case 'gemini': return <span style={{ fontSize: '14px' }}>⭐</span>;
+      case 'groq': return <span style={{ fontSize: '14px' }}>⚡</span>;
+      case 'pattern_match': return <span style={{ fontSize: '14px' }}>🔍</span>;
+      case 'none': return <span style={{ fontSize: '14px' }}>❌</span>;
+      case 'failed': return <ErrorIcon />;
+      case 'unknown': return <span style={{ fontSize: '14px' }}>❓</span>;
+      default: return <AIIcon />;
+    }
+  };
+
+  const getProviderColor = (provider: string): 'default' | 'primary' | 'secondary' | 'error' | 'info' | 'success' | 'warning' => {
+    switch (provider) {
+      case 'huggingface': return 'warning';
+      case 'gemini': return 'info';
+      case 'groq': return 'success';
+      case 'pattern_match': return 'secondary';
+      case 'none': return 'default';
+      case 'failed': return 'error';
+      case 'unknown': return 'default';
+      default: return 'primary';
+    }
+  };
+
   const handleCopy = () => {
     navigator.clipboard.writeText(message.content);
     enqueueSnackbar('Copied to clipboard', { variant: 'success' });
@@ -107,13 +146,13 @@ export default function ChatMessage({ message, onTaskClick }: ChatMessageProps) 
             {renderContent()}
             
             {/* Metadata badges */}
-            {message.metadata?.usedAI && (
+            {message.metadata?.provider && (
               <Chip
-                label="AI"
+                label={getProviderDisplayName(message.metadata.provider)}
                 size="small"
-                icon={<AIIcon />}
+                icon={getProviderIcon(message.metadata.provider)}
                 sx={{ mt: 1, mr: 1 }}
-                color={isUser ? 'default' : 'primary'}
+                color={getProviderColor(message.metadata.provider)}
               />
             )}
             

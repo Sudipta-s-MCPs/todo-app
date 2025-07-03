@@ -146,6 +146,8 @@ interface ServicesStatus {
     minio?: ServiceStatus
     qdrant?: ServiceStatus
     groq?: ServiceStatus
+    huggingface?: ServiceStatus
+    gemini?: ServiceStatus
   }
 }
 
@@ -331,7 +333,9 @@ export default function System() {
                         <WarningIcon color="warning" />
                       )}
                       <Typography variant="subtitle1" sx={{ ml: 1, fontWeight: 'medium' }}>
-                        {serviceName.toUpperCase()}
+                        {serviceName === 'huggingface' ? 'HuggingFace' : 
+                         serviceName === 'gemini' ? 'Gemini AI' :
+                         serviceName.toUpperCase()}
                       </Typography>
                     </Box>
                     <Typography 

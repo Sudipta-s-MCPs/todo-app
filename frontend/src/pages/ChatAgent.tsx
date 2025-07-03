@@ -24,9 +24,9 @@ import { useSnackbar } from 'notistack';
 
 import ChatMessage from '../components/ChatMessage';
 import ChatInput from '../components/ChatInput';
-import TaskPreview from '../components/TaskPreview';
+import TaskSuggestionPreview from '../components/TaskSuggestionPreview';
 import { chatService } from '../services/chatService';
-import type { ChatMessage as ChatMessageType, Task } from '../types';
+import type { ChatMessage as ChatMessageType } from '../types';
 
 export default function ChatAgent() {
   const theme = useTheme();
@@ -35,7 +35,7 @@ export default function ChatAgent() {
   
   const [messages, setMessages] = useState<ChatMessageType[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [previewTasks, setPreviewTasks] = useState<Task[]>([]);
+  const [suggestedTasks, setSuggestedTasks] = useState<any[]>([]);
   const [aiUsageToday, setAiUsageToday] = useState({ used: 0, limit: 50 });
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -124,9 +124,9 @@ export default function ChatAgent() {
       // Add assistant response
       setMessages(prev => [...prev, response.message]);
       
-      // Update preview tasks if any
+      // Update suggested tasks if any
       if (response.tasks && response.tasks.length > 0) {
-        setPreviewTasks(response.tasks);
+        setSuggestedTasks(response.tasks);
       }
       
       // Update AI usage
@@ -134,9 +134,11 @@ export default function ChatAgent() {
         setAiUsageToday(prev => ({ ...prev, used: prev.used + 1 }));
       }
       
-      // Show action notification if any
-      if (response.action) {
-        enqueueSnackbar(`Task ${response.action}`, { variant: 'success' });
+      // Show notification only when tasks are actually created (not suggested)
+      if (response.action === 'created' && response.tasks && response.tasks.length > 0) {
+        enqueueSnackbar('Task created successfully', { variant: 'success' });
+      } else if (response.action === 'suggested' || response.action === 'suggest_task') {
+        // Don't show notification for suggestions - they'll be shown in preview
       }
       
     } catch (error: any) {
@@ -203,7 +205,7 @@ export default function ChatAgent() {
               <ChatMessage
                 key={message.id}
                 message={message}
-                onTaskClick={(task) => setPreviewTasks([task])}
+                onTaskClick={() => {}}
               />
             ))}
             {isLoading && (
@@ -232,11 +234,11 @@ export default function ChatAgent() {
           </Box>
         </Box>
 
-        {/* Task Preview Panel */}
-        {previewTasks.length > 0 && !isMobile && (
+        {/* Task Suggestion Panel */}
+        {suggestedTasks.length > 0 && !isMobile && (
           <Paper
             sx={{
-              width: 320,
+              width: 400,
               display: 'flex',
               flexDirection: 'column',
               borderLeft: 1,
@@ -246,21 +248,25 @@ export default function ChatAgent() {
             <Box sx={{ p: 2, display: 'flex', alignItems: 'center' }}>
               <TaskIcon sx={{ mr: 1 }} />
               <Typography variant="h6" sx={{ flexGrow: 1 }}>
-                Task Preview
+                Task Suggestion
               </Typography>
-              <IconButton size="small" onClick={() => setPreviewTasks([])}>
+              <IconButton size="small" onClick={() => setSuggestedTasks([])}>
                 <CloseIcon />
               </IconButton>
             </Box>
             <Divider />
             <Box sx={{ flex: 1, overflow: 'auto', p: 2 }}>
-              {previewTasks.map((task) => (
-                <TaskPreview
-                  key={task.id}
-                  task={task}
-                  onUpdate={() => {
-                    // Refresh task after update
-                    enqueueSnackbar('Task updated', { variant: 'success' });
+              {suggestedTasks.map((task, index) => (
+                <TaskSuggestionPreview
+                  key={`suggestion-${index}`}
+                  suggestion={task}
+                  onApprove={() => {
+                    setSuggestedTasks([]);
+                    enqueueSnackbar('Task created successfully', { variant: 'success' });
+                  }}
+                  onReject={() => {
+                    setSuggestedTasks([]);
+                    enqueueSnackbar('Task suggestion rejected', { variant: 'info' });
                   }}
                 />
               ))}

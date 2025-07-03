@@ -3,11 +3,16 @@ Smart Task Parser for MCP using AI
 Created: 2025-01-02 06:30:00 PST
 """
 
+import os
+import sys
 import re
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta
 from dateutil import parser as date_parser
 import asyncio
+
+# Add parent directory to Python path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.services.ai_service import get_ai_service, TaskAnalysis
 from app.utils.logging import get_logger

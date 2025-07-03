@@ -58,6 +58,12 @@ class User(Base):
     is_verified = Column(Boolean, default=False)
     is_admin = Column(Boolean, default=False)
     
+    # Approval system
+    approval_status = Column(String(50), default="pending")  # pending, approved, rejected
+    approved_at = Column(DateTime, nullable=True)
+    approved_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    rejection_reason = Column(Text, nullable=True)
+    
     # Two-factor authentication
     totp_secret = Column(String(32), nullable=True)
     two_factor_enabled = Column(Boolean, default=False)

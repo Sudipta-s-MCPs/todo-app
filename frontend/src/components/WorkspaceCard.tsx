@@ -53,27 +53,32 @@ export default function WorkspaceCard({
     setAnchorEl(null);
   };
 
-  const handleEdit = () => {
+  const handleEdit = (event?: React.MouseEvent) => {
+    event?.stopPropagation();
     handleMenuClose();
     onEdit(workspace);
   };
 
-  const handleDelete = () => {
+  const handleDelete = (event?: React.MouseEvent) => {
+    event?.stopPropagation();
     handleMenuClose();
     onDelete(workspace);
   };
 
-  const handleManageMembers = () => {
+  const handleManageMembers = (event?: React.MouseEvent) => {
+    event?.stopPropagation();
     handleMenuClose();
     onManageMembers(workspace);
   };
 
-  const handleManageLists = () => {
+  const handleManageLists = (event?: React.MouseEvent) => {
+    event?.stopPropagation();
     handleMenuClose();
     onManageLists(workspace);
   };
 
-  const handleLeave = () => {
+  const handleLeave = (event?: React.MouseEvent) => {
+    event?.stopPropagation();
     handleMenuClose();
     onLeave?.(workspace);
   };
@@ -117,7 +122,7 @@ export default function WorkspaceCard({
                 </Typography>
               </Box>
 
-              {workspace.type === 'shared' && (
+              {workspace.type === 'team' && (
                 <Box display="flex" alignItems="center" gap={1}>
                   <PeopleIcon fontSize="small" color="action" />
                   <Typography variant="body2" color="text.secondary">
@@ -147,33 +152,33 @@ export default function WorkspaceCard({
           }}
         >
           {isOwner && (
-            <MenuItem onClick={handleEdit}>
+            <MenuItem onClick={(e) => handleEdit(e)}>
               <EditIcon fontSize="small" sx={{ mr: 1 }} />
               Edit
             </MenuItem>
           )}
           
-          <MenuItem onClick={handleManageLists}>
+          <MenuItem onClick={(e) => handleManageLists(e)}>
             <ListIcon fontSize="small" sx={{ mr: 1 }} />
             Manage Lists
           </MenuItem>
           
-          {workspace.type === 'shared' && isOwner && (
-            <MenuItem onClick={handleManageMembers}>
+          {workspace.type === 'team' && isOwner && (
+            <MenuItem onClick={(e) => handleManageMembers(e)}>
               <PeopleIcon fontSize="small" sx={{ mr: 1 }} />
               Manage Members
             </MenuItem>
           )}
           
-          {workspace.type === 'shared' && !isOwner && onLeave && (
-            <MenuItem onClick={handleLeave}>
+          {workspace.type === 'team' && !isOwner && onLeave && (
+            <MenuItem onClick={(e) => handleLeave(e)}>
               <LeaveIcon fontSize="small" sx={{ mr: 1 }} />
               Leave Workspace
             </MenuItem>
           )}
           
           {isOwner && (
-            <MenuItem onClick={handleDelete} sx={{ color: 'error.main' }}>
+            <MenuItem onClick={(e) => handleDelete(e)} sx={{ color: 'error.main' }}>
               <DeleteIcon fontSize="small" sx={{ mr: 1 }} />
               Delete
             </MenuItem>

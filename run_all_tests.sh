@@ -14,33 +14,34 @@ fi
 echo "✅ Services are running"
 echo ""
 
-# Install test dependencies
-echo "📦 Installing test dependencies..."
-docker-compose exec test-client pip install -r requirements.txt > /dev/null 2>&1
+# Get API URL and test key from environment or use defaults
+API_URL="${API_BASE_URL:-http://localhost:5482}"
+TEST_KEY="${TEST_API_KEY:-test_key_for_production_testing}"
 
-# Run API tests
+# Run all tests using run_prod_tests.py
+echo "🧪 Running all tests using run_prod_tests.py..."
+echo "API URL: $API_URL"
 echo ""
-echo "1️⃣ Running API Tests..."
-echo "------------------------"
-docker-compose exec test-client python /app/test_api.py
 
-# Run frontend feature tests
-echo ""
-echo "2️⃣ Running Frontend Feature Tests..."
-echo "------------------------------------"
-docker-compose exec test-client python /app/test_frontend_features.py
+# Run the production test script which handles all test types
+python3 run_prod_tests.py --api-url "$API_URL" --api-key "$TEST_KEY" --websocket
 
-# Run E2E scenario tests
+# Run additional standalone tests
 echo ""
-echo "3️⃣ Running End-to-End Scenarios..."
-echo "-----------------------------------"
-docker-compose exec test-client python /app/test_e2e_scenarios.py
-
-# Run production tests
-echo ""
-echo "4️⃣ Running Production Tests..."
+echo "📊 Running additional tests..."
 echo "-------------------------------"
-./run_prod_tests.py
+
+# Run comprehensive test if it exists
+if [ -f "test_comprehensive.py" ]; then
+    echo "Running comprehensive test..."
+    python3 test_comprehensive.py
+fi
+
+# Run chat test if it exists
+if [ -f "test_chat.py" ]; then
+    echo "Running chat test..."
+    python3 test_chat.py
+fi
 
 echo ""
 echo "================================"

@@ -3,7 +3,6 @@ Object storage service using Minio
 Created: 2025-01-02 11:30:00 PST
 """
 
-import os
 import io
 import json
 from typing import Optional, Dict, Any, BinaryIO
@@ -17,6 +16,7 @@ from minio.error import S3Error
 from minio.datatypes import Object as MinioObject
 
 from app.utils.logging import get_logger
+from app.services.dynamic_settings import dynamic_settings
 
 logger = get_logger(__name__)
 
@@ -25,11 +25,11 @@ class StorageService:
     """Service for managing file storage in Minio"""
     
     def __init__(self):
-        self.endpoint = os.getenv("MINIO_ENDPOINT", "localhost:9000")
-        self.access_key = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
-        self.secret_key = os.getenv("MINIO_SECRET_KEY", "minioadmin")
-        self.secure = os.getenv("MINIO_SECURE", "false").lower() == "true"
-        self.bucket_name = os.getenv("MINIO_BUCKET_NAME", "smart-todo")
+        self.endpoint = dynamic_settings.MINIO_ENDPOINT or "localhost:9000"
+        self.access_key = dynamic_settings.MINIO_ACCESS_KEY or "minioadmin"
+        self.secret_key = dynamic_settings.MINIO_SECRET_KEY or "minioadmin"
+        self.secure = dynamic_settings.MINIO_SECURE
+        self.bucket_name = dynamic_settings.MINIO_BUCKET_NAME
         
         # Initialize Minio client
         self.client = Minio(

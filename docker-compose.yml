@@ -77,22 +77,6 @@ services:
       - backend
     restart: unless-stopped
 
-  test-client:
-    build:
-      context: ./test-client
-      dockerfile: Dockerfile
-    container_name: smart-todo-test-client
-    environment:
-      - API_BASE_URL=${API_BASE_URL}
-      - TEST_API_KEY=${TEST_API_KEY}
-    volumes:
-      - ./test-client:/app
-    networks:
-      - smart-todo-network
-    depends_on:
-      - backend
-    restart: unless-stopped
-
   mcp-server:
     build:
       context: ./backend
@@ -107,7 +91,10 @@ services:
       - TODO_API_ENDPOINT=http://backend:8000/api/v1
       - MCP_SERVER_NAME=${MCP_SERVER_NAME:-TodoApp}
       - MCP_SERVER_VERSION=${MCP_SERVER_VERSION:-1.0.0}
-    command: ["python", "mcp_server/server.py"]
+      - PYTHONPATH=/app
+    command: ["sh", "-c", "cd /app && python -m mcp_server.server"]
+    volumes:
+      - ./backend:/app
     depends_on:
       - backend
     networks:

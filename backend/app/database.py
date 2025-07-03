@@ -15,7 +15,12 @@ engine = create_async_engine(
     str(settings.DATABASE_URL),
     poolclass=NullPool,  # Disable connection pooling for async
     echo=False,  # Set to True for SQL logging
-    future=True
+    future=True,
+    connect_args={
+        "server_settings": {"jit": "off"},
+        "timeout": 10,
+        "command_timeout": 10,
+    }
 )
 
 # Create async session factory

@@ -33,6 +33,22 @@ async def lifespan(app: FastAPI):
     await redis_cache.connect()
     logger.info("Redis cache initialized")
     
+    # Load dynamic settings from database
+    try:
+        from app.services.dynamic_settings import dynamic_settings
+        from app.database import AsyncSessionLocal
+        
+        async with AsyncSessionLocal() as db:
+            await dynamic_settings.load_settings(db)
+            logger.info("Dynamic settings loaded from database")
+            
+        # Initialize LDAP service with dynamic settings
+        from app.services.ldap import ldap_service
+        ldap_service.update_from_dynamic_settings()
+        logger.info(f"LDAP configuration loaded. LDAP enabled: {dynamic_settings.LDAP_ENABLED}")
+    except Exception as e:
+        logger.error(f"Failed to load dynamic settings from database: {e}")
+    
     yield
     
     # Shutdown

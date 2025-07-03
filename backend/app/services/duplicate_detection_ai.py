@@ -7,7 +7,6 @@ from typing import List, Dict, Tuple, Optional
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-import os
 
 from app.models.task import Task, TaskStatus
 from app.models.workspace import List as TaskList
@@ -15,6 +14,7 @@ from app.models.user import User
 from app.services.duplicate_detection import DuplicateDetector
 from app.services.ai_service import get_ai_service, TaskAnalysis
 from app.services.vector_service import get_vector_service
+from app.services.dynamic_settings import dynamic_settings
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -27,8 +27,8 @@ class AIEnhancedDuplicateDetector(DuplicateDetector):
         super().__init__()
         self.ai_service = get_ai_service()
         self.vector_service = get_vector_service()
-        self.use_ai = os.getenv("ENABLE_AI_DUPLICATE_DETECTION", "true").lower() == "true"
-        self.use_vectors = os.getenv("ENABLE_VECTOR_SEARCH", "true").lower() == "true"
+        self.use_ai = dynamic_settings.ENABLE_AI_DUPLICATE_DETECTION
+        self.use_vectors = dynamic_settings.ENABLE_VECTOR_SEARCH
     
     @classmethod
     async def find_duplicates_with_ai(

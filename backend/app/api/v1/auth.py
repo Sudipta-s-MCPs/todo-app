@@ -18,6 +18,7 @@ from app.database import get_db
 from app.models.user import User, UserDevice, UserSession, APIKey, MCPAgent, DeviceType, AccessMethod
 from app.models.activity import ActivityLog, ActionType, ResourceType
 from app.config import settings
+from app.services.dynamic_settings import dynamic_settings
 from app.schemas.auth import (
     UserRegister, UserLogin, Token, TokenRefresh, LoginResponse, PasswordReset,
     PasswordResetConfirm, PasswordChange, DeviceInfo, APIKeyCreate,
@@ -62,7 +63,8 @@ async def register(
         name=user_data.name,
         password_hash=get_password_hash(user_data.password),
         timezone=user_data.timezone,
-        locale=user_data.locale
+        locale=user_data.locale,
+        approval_status="pending"
     )
     db.add(user)
     await db.commit()
@@ -104,7 +106,7 @@ async def login(
     user = result.scalar_one_or_none()
     
     # Check if LDAP is enabled
-    if settings.LDAP_ENABLED:
+    if ldap_service.ldap_enabled:
         # If user doesn't exist or is an LDAP user, try LDAP authentication
         if not user or user.auth_provider == "ldap":
             ldap_result = await ldap_service.authenticate(
@@ -115,7 +117,7 @@ async def login(
             if ldap_result.success and ldap_result.user_info:
                 if not user:
                     # Auto-create user from LDAP if enabled
-                    if settings.LDAP_AUTO_CREATE_USER:
+                    if dynamic_settings.LDAP_AUTO_CREATE_USER:
                         user = await create_user_from_ldap(ldap_result.user_info, db)
                     else:
                         raise HTTPException(
@@ -172,6 +174,18 @@ async def login(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account is inactive"
+        )
+    
+    # Check if user is approved
+    if user.approval_status != "approved" and not user.is_admin:
+        security_logger.log_auth_failure(
+            ip_address=request.client.host,
+            email=form_data.username,
+            reason="Account pending approval"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account is pending approval. You will receive an email once your account is approved."
         )
     
     # Get device info from headers
@@ -276,6 +290,7 @@ async def login(
             is_active=user.is_active,
             is_verified=user.is_verified,
             is_admin=is_admin_user(user),
+            approval_status=user.approval_status,
             two_factor_enabled=user.two_factor_enabled,
             created_at=user.created_at,
             last_active_at=user.last_active_at
@@ -958,7 +973,7 @@ async def sync_ldap_user(
     db: AsyncSession = Depends(get_db)
 ):
     """Sync current user data from LDAP"""
-    if not settings.LDAP_ENABLED:
+    if not ldap_service.ldap_enabled:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="LDAP authentication is not enabled"
@@ -1014,7 +1029,7 @@ async def search_ldap_users(
     db: AsyncSession = Depends(get_db)
 ):
     """Search for users in LDAP directory (admin only)"""
-    if not settings.LDAP_ENABLED:
+    if not ldap_service.ldap_enabled:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="LDAP authentication is not enabled"

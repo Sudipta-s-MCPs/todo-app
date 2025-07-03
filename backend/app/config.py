@@ -110,25 +110,7 @@ class Settings(BaseSettings):
     # WebSocket Configuration  
     WEBSOCKETS_ENABLED: bool = Field(default=True)
     
-    # LDAP Configuration
-    LDAP_ENABLED: bool = Field(default=False)
-    LDAP_SERVER: str = Field(default="sudipta.synology.me")
-    LDAP_PORT: int = Field(default=389)
-    LDAP_USE_SSL: bool = Field(default=False)
-    LDAP_START_TLS: bool = Field(default=False)
-    LDAP_BIND_DN: Optional[str] = Field(default=None)
-    LDAP_BIND_PASSWORD: Optional[str] = Field(default=None)
-    LDAP_BASE_DN: str = Field(default="dc=sudipta,dc=synology,dc=me")
-    LDAP_USER_DN_TEMPLATE: str = Field(default="uid={username},cn=users,dc=sudipta,dc=synology,dc=me")
-    LDAP_USER_SEARCH_BASE: str = Field(default="cn=users,dc=sudipta,dc=synology,dc=me")
-    LDAP_USER_FILTER: str = Field(default="(objectClass=inetOrgPerson)")
-    LDAP_USER_ATTR_EMAIL: str = Field(default="mail")
-    LDAP_USER_ATTR_NAME: str = Field(default="displayName")
-    LDAP_USER_ATTR_UID: str = Field(default="uid")
-    LDAP_GROUP_SEARCH_BASE: str = Field(default="cn=groups,dc=sudipta,dc=synology,dc=me")
-    LDAP_GROUP_FILTER: str = Field(default="(objectClass=groupOfNames)")
-    LDAP_CONNECTION_TIMEOUT: int = Field(default=5)
-    LDAP_AUTO_CREATE_USER: bool = Field(default=True)
+    # LDAP Configuration is now loaded from database via dynamic_settings
     
     # User Limits
     MAX_WORKSPACES_PER_USER: int = Field(default=10)
@@ -156,40 +138,38 @@ class Settings(BaseSettings):
     DESCRIPTION: str = Field(default="Advanced ToDo Application with MCP Support")
     ENVIRONMENT: str = Field(default="development")
     
-    # Validators temporarily disabled for migration
-    # TODO: Fix validators for Pydantic v2
-    # @field_validator('SECRET_KEY', mode='after')
-    # @classmethod
-    # def validate_secret_key(cls, v, info):
-    #     """Validate secret key is secure"""
-    #     env = info.data.get('ENVIRONMENT', 'development') if hasattr(info, 'data') else 'development'
-    #     if env == 'production' and (not v or v == 'your-secret-key-here' or len(v) < 32):
-    #         raise ValueError(
-    #             "SECRET_KEY must be set to a secure value in production. "
-    #             "Use a cryptographically secure random string of at least 32 characters."
-    #         )
-    #     elif env == 'development' and (not v or v == 'your-secret-key-here'):
-    #         # Generate a random key for development
-    #         return secrets.token_urlsafe(32)
-    #     return v
+    @field_validator('SECRET_KEY')
+    @classmethod
+    def validate_secret_key(cls, v: Optional[str], info) -> str:
+        """Validate secret key is secure"""
+        # Get environment from current values
+        env = info.data.get('ENVIRONMENT', 'development')
+        
+        if env == 'production':
+            if not v or v == 'your-secret-key-here' or len(v) < 32:
+                raise ValueError(
+                    "SECRET_KEY must be set to a secure value in production. "
+                    "Use a cryptographically secure random string of at least 32 characters."
+                )
+        elif env == 'development':
+            if not v or v == 'your-secret-key-here':
+                # Generate a random key for development
+                return secrets.token_urlsafe(32)
+        
+        return v
     
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         
-        # Set defaults for development
+        # Set defaults for development (SECRET_KEY is handled by validator)
         if self.ENVIRONMENT == 'development':
-            if not self.SECRET_KEY:
-                self.SECRET_KEY = secrets.token_urlsafe(32)
             if not self.DATABASE_URL:
                 self.DATABASE_URL = PostgresDsn("postgresql+asyncpg://postgres:postgres@localhost:5432/smart_todo")
             if not self.REDIS_URL:
                 self.REDIS_URL = RedisDsn("redis://localhost:6379/0")
         
-        # Show warnings for insecure configurations
+        # Validate required settings for production
         if self.ENVIRONMENT == 'production':
-            if not self.SECRET_KEY or self.SECRET_KEY == 'your-secret-key-here':
-                raise ValueError("SECRET_KEY must be set in production")
-            
             if not self.DATABASE_URL:
                 raise ValueError("DATABASE_URL must be set in production")
                 

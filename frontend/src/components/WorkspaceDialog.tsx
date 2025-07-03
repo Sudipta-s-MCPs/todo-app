@@ -62,7 +62,7 @@ export default function WorkspaceDialog({
     defaultValues: {
       name: '',
       description: '',
-      type: 'shared',
+      type: 'team',
       emoji: '📁',
       color: '#1890FF',
     },
@@ -83,7 +83,7 @@ export default function WorkspaceDialog({
       reset({
         name: '',
         description: '',
-        type: 'shared',
+        type: 'team',
         emoji: '📁',
         color: '#1890FF',
       });
@@ -184,7 +184,7 @@ export default function WorkspaceDialog({
                     <InputLabel>Type</InputLabel>
                     <Select {...field} label="Type">
                       <MenuItem value="personal">Personal</MenuItem>
-                      <MenuItem value="shared">Shared</MenuItem>
+                      <MenuItem value="team">Team</MenuItem>
                     </Select>
                   </FormControl>
                 )}

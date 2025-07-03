@@ -30,7 +30,16 @@ class GroqProvider(AIProvider):
                 logger.warning("Groq API key not configured")
                 return False
                 
-            self._client = Groq(api_key=api_key)
+            # Initialize Groq client without proxies parameter
+            try:
+                self._client = Groq(api_key=api_key)
+            except TypeError as te:
+                # Handle case where Groq doesn't accept certain parameters
+                logger.warning(f"Groq initialization parameter issue: {str(te)}")
+                # Try alternative initialization if needed
+                import groq
+                self._client = groq.Groq(api_key=api_key)
+                
             self.model = dynamic_settings.GROQ_MODEL
             self._initialized = True
             logger.info(f"Groq provider initialized with model: {self.model}")

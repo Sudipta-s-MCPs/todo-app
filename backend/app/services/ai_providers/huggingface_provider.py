@@ -3,11 +3,14 @@ HuggingFace AI Provider implementation
 Updated: 2025-07-02 22:30:00 PST - Migrated to new Inference Providers API
 Fixed: 2025-07-02 23:45:00 PST - Direct router.huggingface.co integration
 Final: 2025-07-02 24:00:00 PST - Proper InferenceClient implementation with provider support
+Updated: 2025-07-03 - Added timeout handling for better reliability
+Updated: 2025-07-03 07:45:00 PST - Added hf-inference provider support with api_key parameter
 """
 
 from typing import Dict, Any, Optional, List
 import logging
 import json
+import asyncio
 
 from app.services.dynamic_settings import dynamic_settings
 from .base import AIProvider, AIResponse, AIProviderError, AIProviderUnavailableError
@@ -46,12 +49,15 @@ class HuggingFaceProvider(AIProvider):
             try:
                 from huggingface_hub import InferenceClient
                 
-                # Create InferenceClient with provider and token
-                if self.provider == "auto":
+                # Create InferenceClient with provider and token/api_key
+                if self.provider in ["novita", "hf-inference"]:
+                    # Novita and hf-inference providers use api_key parameter
+                    self.client = InferenceClient(provider=self.provider, api_key=self.api_token)
+                elif self.provider == "auto":
                     # Let HuggingFace automatically select the best provider
                     self.client = InferenceClient(provider="auto", token=self.api_token)
                 else:
-                    # Use specific provider (hf-inference for Pro users)
+                    # Use specific provider with token
                     self.client = InferenceClient(
                         provider=self.provider,
                         token=self.api_token
@@ -64,11 +70,18 @@ class HuggingFaceProvider(AIProvider):
                     if self.model:
                         # Try a minimal request to test the model
                         test_messages = [{"role": "user", "content": "Hi"}]
-                        test_response = self.client.chat_completion(
-                            messages=test_messages,
-                            model=self.model,
-                            max_tokens=1
-                        )
+                        if self.provider in ["novita", "hf-inference"]:
+                            test_response = self.client.chat.completions.create(
+                                messages=test_messages,
+                                model=self.model,
+                                max_tokens=1
+                            )
+                        else:
+                            test_response = self.client.chat_completion(
+                                messages=test_messages,
+                                model=self.model,
+                                max_tokens=1
+                            )
                         logger.info(f"HuggingFace model '{self.model}' validated successfully")
                     
                 except Exception as model_error:
@@ -86,11 +99,18 @@ class HuggingFaceProvider(AIProvider):
                         
                         for fallback_model in fallback_models:
                             try:
-                                test_response = self.client.chat_completion(
-                                    messages=[{"role": "user", "content": "Hi"}],
-                                    model=fallback_model,
-                                    max_tokens=1
-                                )
+                                if self.provider in ["novita", "hf-inference"]:
+                                    test_response = self.client.chat.completions.create(
+                                        messages=[{"role": "user", "content": "Hi"}],
+                                        model=fallback_model,
+                                        max_tokens=1
+                                    )
+                                else:
+                                    test_response = self.client.chat_completion(
+                                        messages=[{"role": "user", "content": "Hi"}],
+                                        model=fallback_model,
+                                        max_tokens=1
+                                    )
                                 self.model = fallback_model
                                 logger.info(f"Successfully switched to fallback model: {self.model}")
                                 break
@@ -142,15 +162,38 @@ class HuggingFaceProvider(AIProvider):
             
             messages.append({"role": "user", "content": user_content})
             
-            # Use InferenceClient for the request
+            # Use InferenceClient for the request with timeout
             try:
-                completion = self.client.chat_completion(
-                    messages=messages,
-                    model=self.model,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    stream=False
-                )
+                # Create a timeout of 15 seconds for HuggingFace API calls
+                if self.provider in ["novita", "hf-inference"]:
+                    # Use the new API pattern for novita and hf-inference
+                    completion = await asyncio.wait_for(
+                        asyncio.create_task(
+                            asyncio.to_thread(
+                                self.client.chat.completions.create,
+                                messages=messages,
+                                model=self.model,
+                                max_tokens=max_tokens,
+                                temperature=temperature
+                            )
+                        ),
+                        timeout=15.0  # 15 second timeout
+                    )
+                else:
+                    # Use the old API pattern for other providers
+                    completion = await asyncio.wait_for(
+                        asyncio.create_task(
+                            asyncio.to_thread(
+                                self.client.chat_completion,
+                                messages=messages,
+                                model=self.model,
+                                max_tokens=max_tokens,
+                                temperature=temperature,
+                                stream=False
+                            )
+                        ),
+                        timeout=15.0  # 15 second timeout
+                    )
                 
                 # Extract content from response
                 content = completion.choices[0].message.content
@@ -180,6 +223,9 @@ class HuggingFaceProvider(AIProvider):
                     provider=self.name
                 )
                 
+            except asyncio.TimeoutError:
+                logger.warning(f"HuggingFace API timeout after 15 seconds for model {self.model}")
+                raise AIProviderUnavailableError("HuggingFace API request timed out after 15 seconds")
             except Exception as e:
                 error_msg = str(e).lower()
                 
@@ -190,8 +236,8 @@ class HuggingFaceProvider(AIProvider):
                     raise AIProviderUnavailableError("HuggingFace rate limit exceeded")
                 elif "authentication" in error_msg or "401" in error_msg:
                     raise AIProviderError("HuggingFace authentication failed - check API token")
-                elif "model is loading" in error_msg or "503" in error_msg:
-                    raise AIProviderUnavailableError("Model is currently loading, please try again")
+                elif "model is loading" in error_msg or "503" in error_msg or "504" in error_msg:
+                    raise AIProviderUnavailableError("Model is currently loading or gateway timeout, please try again")
                 elif "timeout" in error_msg:
                     raise AIProviderUnavailableError("HuggingFace API request timed out")
                 else:
@@ -216,12 +262,33 @@ class HuggingFaceProvider(AIProvider):
             # Make a simple test request to verify the model is available
             test_messages = [{"role": "user", "content": "Hello"}]
             
-            completion = self.client.chat_completion(
-                messages=test_messages,
-                model=self.model,
-                max_tokens=1,
-                temperature=0.1
-            )
+            # Use a shorter timeout for availability check (5 seconds)
+            if self.provider in ["novita", "hf-inference"]:
+                completion = await asyncio.wait_for(
+                    asyncio.create_task(
+                        asyncio.to_thread(
+                            self.client.chat.completions.create,
+                            messages=test_messages,
+                            model=self.model,
+                            max_tokens=1,
+                            temperature=0.1
+                        )
+                    ),
+                    timeout=5.0
+                )
+            else:
+                completion = await asyncio.wait_for(
+                    asyncio.create_task(
+                        asyncio.to_thread(
+                            self.client.chat_completion,
+                            messages=test_messages,
+                            model=self.model,
+                            max_tokens=1,
+                            temperature=0.1
+                        )
+                    ),
+                    timeout=5.0
+                )
             
             # If we get here without exception, the service is available
             return True

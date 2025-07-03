@@ -2,7 +2,8 @@
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple
+from typing import List as TypingList
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, desc, or_
 from sqlalchemy.orm import selectinload
@@ -12,7 +13,6 @@ from app.services.cache import get_redis_client
 from app.models.user import User
 from app.models.task import Task
 from app.models.workspace import Workspace, List, WorkspaceMember
-from typing import List as TypingList
 from app.models.chat import ChatMessage
 from app.models.settings import SystemSetting
 from app.schemas.task import TaskCreate
@@ -26,11 +26,19 @@ class ChatService:
     """Service for handling chat interactions with hybrid approach."""
     
     PATTERN_COMMANDS = {
-        # Task creation patterns
+        # Task creation patterns - expanded for natural language
         r"^(create|add|new)\s+(a\s+)?task\s+(.+)$": "create_task",
+        r"^(create|add|new)\s+(a\s+)?task$": "create_task_prompt",  # Handle "create a task" without title
         r"^remind\s+me\s+to\s+(.+)$": "create_task",
         r"^todo:\s*(.+)$": "create_task",
         r"^task:\s*(.+)$": "create_task",
+        r"^i\s+need\s+to\s+(.+)$": "create_task",
+        r"^i\s+have\s+to\s+(.+)$": "create_task",
+        r"^i\s+must\s+(.+)$": "create_task",
+        r"^don'?t\s+forget\s+to\s+(.+)$": "create_task",
+        r"^remember\s+to\s+(.+)$": "create_task",
+        r"^need\s+to\s+(.+)$": "create_task",
+        r"^have\s+to\s+(.+)$": "create_task",
         
         # Task listing patterns
         r"^(show|list|get)\s+(my\s+)?(all\s+)?tasks?$": "list_tasks",
@@ -44,16 +52,28 @@ class ChatService:
         r"^(what|which|show|list)\s+tasks?\s+(are\s+)?due\s+(today|tomorrow|this\s+week|next\s+week)\??$": "list_due_tasks",
         r"^(what|which|show|list)\s+(is|are)\s+due\s+(today|tomorrow|this\s+week|next\s+week)\??$": "list_due_tasks",
         
-        # Task status updates
-        r"^(complete|finish|done)\s+(with\s+)?task\s+(.+)$": "complete_task",
-        r"^mark\s+(.+)\s+as\s+(complete|done|finished)$": "complete_task",
+        # Task status updates - more flexible patterns
+        r"^mark\s+(?:the\s+)?(.+?)(?:\s+task)?\s+as\s+(complete|done|finished)$": "complete_task",
+        r"^(complete|finish|done)\s+(?:with\s+)?(?:the\s+)?(?:task\s+)?(.+)$": "complete_task",
+        r"^(.+?)(?:\s+task)?\s+is\s+(done|complete|finished|completed)$": "complete_task",
+        r"^i(?:'ve|'m)?\s+(?:done|finished|completed)\s+(?:with\s+)?(?:the\s+)?(.+?)(?:\s+task)?$": "complete_task",
+        r"^(?:just\s+)?(?:done|finished|completed)\s+(?:with\s+)?(?:the\s+)?(.+?)(?:\s+task)?$": "complete_task",
+        r"^check\s+off\s+(?:the\s+)?(.+?)(?:\s+task)?$": "complete_task",
+        r"^tick\s+(?:off\s+)?(?:the\s+)?(.+?)(?:\s+task)?$": "complete_task",
         
         # Workspace operations
         r"^(show|list)\s+(my\s+)?workspaces?$": "list_workspaces",
         r"^create\s+workspace\s+(.+)$": "create_workspace",
         
+        # Greeting patterns
+        r"^(hi|hello|hey|good\s+morning|good\s+afternoon|good\s+evening)$": "greeting",
+        r"^how\s+are\s+you\??$": "greeting",
+        r"^what'?s\s+up\??$": "greeting",
+        
         # Help patterns
         r"^(help|what\s+can\s+you\s+do|commands?)$": "show_help",
+        r"^show\s+me\s+what\s+you\s+can\s+do$": "show_capabilities",
+        r"^what\s+are\s+your\s+capabilities\??$": "show_capabilities",
     }
     
     def __init__(self):
@@ -330,12 +350,8 @@ class ChatService:
             await db.commit()
             await db.refresh(default_list)
         
-        # Extract workspace from task title if mentioned
-        workspace_mentioned = self._extract_workspace_from_text(task_title, all_workspaces)
-        if workspace_mentioned:
-            workspace = workspace_mentioned
-            # Clean the title to remove workspace reference
-            task_title = self._extract_task_title_simple(task_title)
+        # Note: Workspace extraction from title is now handled by AI
+        # This pattern handler is just a simple fallback
         
         # Create task suggestion (not saved to database)
         suggested_task = {
@@ -362,6 +378,19 @@ class ChatService:
             "type": "task_suggestion",
             "action": "suggest_task",
             "tasks": [suggested_task]
+        }
+    
+    async def _handle_create_task_prompt(
+        self, 
+        match: re.Match, 
+        user_id: str, 
+        db: AsyncSession
+    ) -> Dict[str, Any]:
+        """Handle task creation request without a title."""
+        return {
+            "response": "Sure! What task would you like to create? Just tell me what you need to do.",
+            "type": "prompt",
+            "action": "create_task_prompt"
         }
     
     async def _handle_list_tasks(
@@ -679,6 +708,74 @@ class ChatService:
             "tasks": [self._serialize_task(t) for t in tasks]
         }
     
+    async def _handle_greeting(
+        self, 
+        match: re.Match, 
+        user_id: str, 
+        db: AsyncSession
+    ) -> Dict[str, Any]:
+        """Handle greeting messages."""
+        greeting = match.group(1) if match.lastindex >= 1 else "hi"
+        
+        # Get user's task count for personalized greeting
+        task_count_result = await db.execute(
+            select(func.count(Task.id)).where(
+                and_(
+                    Task.created_by == user_id,
+                    Task.status.in_(["todo", "in_progress"])
+                )
+            )
+        )
+        task_count = task_count_result.scalar() or 0
+        
+        # Create personalized greeting
+        if task_count == 0:
+            response = f"Hello! 👋 I'm your Smart ToDo assistant. I see you don't have any tasks yet. Would you like me to help you create your first task? Just tell me what you need to do!"
+        elif task_count == 1:
+            response = f"Hi there! 👋 You have 1 active task. Would you like to see it or add a new one?"
+        else:
+            response = f"Hello! 👋 You have {task_count} active tasks. Would you like to see them, add a new task, or need help with something else?"
+        
+        return {
+            "response": response,
+            "type": "greeting",
+            "action": "greeting"
+        }
+    
+    async def _handle_show_capabilities(
+        self, 
+        match: re.Match, 
+        user_id: str, 
+        db: AsyncSession
+    ) -> Dict[str, Any]:
+        """Show capabilities message."""
+        capabilities_text = """I'm your Smart ToDo assistant! Here's what I can help you with:
+
+**📝 Task Management:**
+• Create tasks - Just say "I need to..." or "remind me to..."
+• View your tasks - Ask "show my tasks" or "what do I have to do?"
+• Complete tasks - Say "complete task [name]" or "mark [task] as done"
+• Filter by priority - Try "show high priority tasks"
+• Check due dates - Ask "what's due today?" or "tasks due this week"
+
+**📁 Organization:**
+• Create workspaces to organize your tasks
+• View tasks in specific workspaces
+• Manage multiple task lists
+
+**💬 Natural Conversation:**
+• I understand natural language - just talk to me normally!
+• I remember our conversation context
+• Ask me anything about managing your tasks
+
+Feel free to chat naturally - I'll understand what you need! 😊"""
+        
+        return {
+            "response": capabilities_text,
+            "type": "help",
+            "action": "show_capabilities"
+        }
+    
     async def _handle_show_help(
         self, 
         match: re.Match, 
@@ -717,6 +814,118 @@ I use AI to understand natural language, but also have pattern matching for comm
             "action": "show_help"
         }
     
+    async def _handle_complete_task(
+        self, 
+        match: re.Match, 
+        user_id: str, 
+        db: AsyncSession
+    ) -> Dict[str, Any]:
+        """Handle pattern-based task completion."""
+        # Extract task name from various pattern groups
+        # The patterns have different capture group positions
+        task_name = None
+        
+        # Check all groups to find the task name
+        groups = match.groups()
+        for i, group in enumerate(groups):
+            if group and group.strip() and group not in ["complete", "done", "finished", "completed", "task", "as", "with", "the", "off"]:
+                task_name = group.strip()
+                break
+        
+        if not task_name:
+            return {
+                "response": "I need to know which task to complete. Please tell me the task name.",
+                "type": "error",
+                "action": "complete_task"
+            }
+        
+        # Search for the task
+        # First try exact match (case-insensitive)
+        task_query = select(Task).join(List).join(Workspace).where(
+            and_(
+                Task.created_by == user_id,
+                Task.status.in_(["todo", "in_progress"]),
+                func.lower(Task.title) == task_name.lower()
+            )
+        ).options(selectinload(Task.list).selectinload(List.workspace))
+        
+        result = await db.execute(task_query)
+        task = result.scalar_one_or_none()
+        
+        # If no exact match, try partial match
+        if not task:
+            task_query = select(Task).join(List).join(Workspace).where(
+                and_(
+                    Task.created_by == user_id,
+                    Task.status.in_(["todo", "in_progress"]),
+                    func.lower(Task.title).contains(task_name.lower())
+                )
+            ).options(selectinload(Task.list).selectinload(List.workspace))
+            
+            result = await db.execute(task_query)
+            tasks = result.scalars().all()
+            
+            if len(tasks) == 0:
+                return {
+                    "response": f"I couldn't find a task matching '{task_name}'. Please check your task list with 'show my tasks'.",
+                    "type": "error",
+                    "action": "complete_task"
+                }
+            elif len(tasks) > 1:
+                # Multiple matches - ask for clarification
+                response = f"I found multiple tasks matching '{task_name}':\n\n"
+                for i, t in enumerate(tasks[:5], 1):  # Show max 5 matches
+                    response += f"{i}. {t.title}"
+                    if hasattr(t, 'list') and t.list:
+                        response += f" (in {t.list.workspace.name} → {t.list.name})"
+                    response += "\n"
+                response += "\nPlease be more specific about which task you want to complete."
+                
+                return {
+                    "response": response,
+                    "type": "clarification",
+                    "action": "complete_task",
+                    "tasks": [self._serialize_task(t) for t in tasks[:5]]
+                }
+            else:
+                task = tasks[0]
+        
+        # Mark task as completed
+        task.status = "completed"
+        task.completed_at = datetime.utcnow()
+        await db.commit()
+        await db.refresh(task)
+        
+        # Generate response
+        response = f"✅ Great! I've marked '{task.title}' as completed."
+        if hasattr(task, 'list') and task.list:
+            response += f"\n📁 {task.list.workspace.name} → {task.list.name}"
+        
+        # Get remaining task count
+        remaining_count_result = await db.execute(
+            select(func.count(Task.id)).where(
+                and_(
+                    Task.created_by == user_id,
+                    Task.status.in_(["todo", "in_progress"])
+                )
+            )
+        )
+        remaining_count = remaining_count_result.scalar() or 0
+        
+        if remaining_count == 0:
+            response += "\n\n🎉 Congratulations! You've completed all your tasks!"
+        elif remaining_count == 1:
+            response += f"\n\nYou have 1 task remaining. Keep it up!"
+        else:
+            response += f"\n\nYou have {remaining_count} tasks remaining. Keep going!"
+        
+        return {
+            "response": response,
+            "type": "success",
+            "action": "complete_task",
+            "tasks": [self._serialize_task(task)]
+        }
+    
     async def get_ai_usage(self, user_id: str) -> Dict[str, int]:
         """Get AI usage stats for a user."""
         try:
@@ -734,7 +943,7 @@ I use AI to understand natural language, but also have pattern matching for comm
         self, 
         user_id: str, 
         db: AsyncSession
-    ) -> "List[Dict[str, Any]]":
+    ) -> TypingList[Dict[str, Any]]:
         """Get user's chat conversations."""
         # Since we have a single conversation per user, return a single item
         # Get message count for the user
@@ -765,7 +974,7 @@ I use AI to understand natural language, but also have pattern matching for comm
         conversation_id: str, 
         user_id: str, 
         db: AsyncSession
-    ) -> "List[Dict[str, Any]]":
+    ) -> TypingList[Dict[str, Any]]:
         """Get messages for a conversation."""
         # Get the chat history limit from settings
         limit_setting = await db.execute(
@@ -806,59 +1015,90 @@ I use AI to understand natural language, but also have pattern matching for comm
             # Get user's context (workspaces, lists, tasks)
             context = await self._get_user_context(user_id, db)
             
+            # Get recent chat history for conversational context
+            chat_history = await self._get_chat_history(user_id, db, limit=10)
+            
             # Create a comprehensive prompt that includes available commands
-            system_prompt = """You are an AI assistant for a task management system. You help users manage tasks, workspaces, and lists.
+            system_prompt = """You are a friendly and helpful AI assistant for Smart ToDo, a task management app. You help users manage their tasks, workspaces, and lists while maintaining a natural, conversational tone.
 
-You have access to the following pattern-based commands that you can use:
+IMPORTANT GUIDELINES:
+1. Be conversational and friendly - respond like a helpful personal assistant, not a robot
+2. Handle greetings warmly (hi, hello, hey, good morning, etc.)
+3. When users say things like "I need to..." or "I have to...", understand they want to create a task
+4. For TASK CREATION: Always use task_details, NOT pattern commands. Extract all context like workspace, list, priority from the request
+5. Only use pattern commands for simple operations like listing tasks or marking tasks complete
+6. Ask for clarification when requests are unclear
+7. Keep responses concise but friendly
 
-Task Creation:
-- "create task [task name]" or "add task [task name]" or "new task [task name]" - Create a new task
-- "remind me to [task]" - Create a reminder task
-- "todo: [task]" - Quick task creation
-- "task: [task]" - Quick task creation
+Pattern commands are ONLY for these simple operations:
+- Task listing: "show tasks", "list tasks", "show [priority] priority tasks"
+- Task completion: "complete task [name]", "mark [task] as done"
+- Workspace operations: "show workspaces"
 
-Task Listing:
-- "show tasks" or "list tasks" - List all active tasks
-- "show high/medium/low priority tasks" - List tasks by priority
-- "what tasks are due today/tomorrow/this week/next week?" - List tasks by due date
-- "show tasks in [workspace name]" - List tasks in specific workspace
+For task creation, ALWAYS set:
+- intent: "task_creation"
+- use_pattern: false
+- task_details with extracted information (title, workspace_id, list_id, priority, etc.)
 
-Task Management:
-- "complete task [task name]" - Mark a task as complete
-- "mark [task] as done" - Mark a task as complete
+CRITICAL: When setting pattern_command, you MUST replace placeholders like [name], [task], [priority] with the ACTUAL values from the user's request.
+For example:
+- User: "mark the Fix profile page task as done" → pattern_command: "mark Fix profile page as done" (NOT "complete task [name]")
+- User: "create task buy milk" → pattern_command: "create task buy milk" (NOT "create task [name]")
+- User: "show high priority tasks" → pattern_command: "show high priority tasks" (NOT "show [priority] priority tasks")
 
-Workspace Operations:
-- "show workspaces" - List all workspaces
-- "create workspace [name]" - Create a new workspace
+CONVERSATION CONTEXT:
+{conversation_history}
 
-When the user's request matches one of these patterns, you should use the pattern command by setting use_pattern to true and providing the exact pattern command.
-For complex queries or when pattern doesn't match exactly, analyze the request and provide appropriate response.
-
-User Context:
+USER CONTEXT:
 {context}
 
-Analyze the user's request and respond with a JSON object:
-{{
-    "intent": "command|task_creation|query|other",
+Analyze the user's request considering the conversation history and respond with:
+{{{{
+    "intent": "greeting|task_creation|task_query|general_query|clarification|other",
     "use_pattern": true/false,
-    "pattern_command": "exact pattern command to use if use_pattern is true",
-    "response": "natural language response to user",
-    "task_details": {{ // only if intent is task_creation
+    "pattern_command": "exact command if use_pattern is true",
+    "response": "friendly, natural response to user",
+    "needs_clarification": true/false,
+    "task_details": {{{{ // only if creating a task
         "title": "task title",
         "description": "optional description",
         "workspace_id": "workspace UUID",
         "list_id": "list UUID",
         "priority": "low|medium|high",
         "due_date": "ISO date or null"
-    }},
+    }}}},
     "confidence": 0.0-1.0
-}}"""
+}}}}
 
+Examples:
+- User: "Hi" → intent: "greeting", use_pattern: false, response: "Hello! I'm here to help you manage your tasks. What would you like to do today?"
+- User: "I need to buy groceries" → intent: "task_creation", use_pattern: false, task_details: {{"title": "buy groceries", "workspace_id": "[first workspace id]", "list_id": "[default list id]", "priority": "medium"}}, response: "I'll create a task for buying groceries."
+- User: "create a task to add voice button in chat in ToDo app workspace frontend list" → intent: "task_creation", use_pattern: false, task_details: {{"title": "add voice button in chat", "workspace_id": "[ToDo app workspace id]", "list_id": "[frontend list id]", "priority": "medium"}}, response: "I'll create a task to add a voice button in the chat feature."
+- User: "mark the Fix profile page task as done" → intent: "task_completion", use_pattern: true, pattern_command: "mark Fix profile page as done", response: "I'll mark that task as complete for you."
+- User: "What can you do?" → intent: "general_query", use_pattern: false, response: "I can help you create and manage tasks, organize them in workspaces, set priorities and due dates, and keep track of what needs to be done. Just tell me what you need!"
+"""
+
+            # Format conversation history
+            conversation_history_str = ""
+            if chat_history:
+                conversation_history_str = "Recent conversation:\n"
+                for msg in chat_history[-6:]:  # Only use last 6 messages for context
+                    role = "User" if msg["role"] == "user" else "Assistant"
+                    conversation_history_str += f"{role}: {msg['content']}\n"
+            else:
+                conversation_history_str = "This is the start of the conversation."
+            
             # Format context for prompt
             context_str = f"""
 Workspaces: {', '.join([f"{w['name']} (ID: {w['id']})" for w in context['workspaces']])}
-Lists: {', '.join([f"{l['name']} in {l['workspace_name']}" for l in context['lists']])}
+Lists: {', '.join([f"{l['name']} in {l['workspace_name']} (ID: {l['id']})" for l in context['lists']])}
 Active Tasks: {context['task_count']}
+
+When creating tasks, use the actual workspace and list IDs from above. Match workspace/list names mentioned by the user to their IDs.
+IMPORTANT: Be flexible with name matching:
+- "ToDo app workspace" or "todo app" → match "ToDo App" workspace
+- "frontend list" or "frontend" → match "Frontend Task Lists"
+- Use partial matching and be case-insensitive
 """
 
             # Call AI service
@@ -874,7 +1114,10 @@ Active Tasks: {context['task_count']}
                     response = await ai_service._call_provider(
                         provider,
                         f"User request: {content}",
-                        system_prompt.format(context=context_str)
+                        system_prompt.format(
+                            conversation_history=conversation_history_str,
+                            context=context_str
+                        )
                     )
                     
                     if response:
@@ -940,6 +1183,27 @@ Active Tasks: {context['task_count']}
         except Exception as e:
             logger.error(f"AI unified processing error: {str(e)}")
             return {"success": False}
+    
+    async def _get_chat_history(self, user_id: str, db: AsyncSession, limit: int = 10) -> TypingList[Dict[str, Any]]:
+        """Get recent chat history for conversational context."""
+        # Get the last N messages for the user
+        result = await db.execute(
+            select(ChatMessage)
+            .where(ChatMessage.user_id == user_id)
+            .order_by(ChatMessage.created_at.desc())
+            .limit(limit)
+        )
+        messages = result.scalars().all()
+        
+        # Return messages in chronological order
+        return [
+            {
+                "role": "user" if msg.sender == "user" else "assistant",
+                "content": msg.content,
+                "timestamp": msg.created_at.isoformat() if msg.created_at else None
+            }
+            for msg in reversed(messages)
+        ]
     
     async def _get_user_context(self, user_id: str, db: AsyncSession) -> Dict[str, Any]:
         """Get user's context for AI processing."""
@@ -1024,7 +1288,33 @@ Active Tasks: {context['task_count']}
     ) -> Optional[Dict[str, Any]]:
         """Create a task suggestion from AI-extracted details."""
         try:
-            # Validate workspace and list IDs
+            workspace_name = None
+            list_name = None
+            
+            # Get workspace name if workspace_id is provided
+            if task_details.get("workspace_id"):
+                ws_result = await db.execute(
+                    select(Workspace).where(
+                        and_(
+                            Workspace.id == task_details["workspace_id"],
+                            or_(
+                                Workspace.owner_id == user_id,
+                                Workspace.id.in_(
+                                    select(WorkspaceMember.workspace_id).where(
+                                        WorkspaceMember.user_id == user_id
+                                    )
+                                )
+                            )
+                        )
+                    )
+                )
+                workspace = ws_result.scalar_one_or_none()
+                if workspace:
+                    workspace_name = workspace.name
+                else:
+                    logger.warning(f"Invalid workspace ID: {task_details['workspace_id']}")
+            
+            # Validate list and get list name
             if task_details.get("list_id"):
                 # Verify list exists and user has access
                 list_result = await db.execute(
@@ -1043,7 +1333,9 @@ Active Tasks: {context['task_count']}
                     )
                 )
                 task_list = list_result.scalar_one_or_none()
-                if not task_list:
+                if task_list:
+                    list_name = task_list.name
+                else:
                     logger.warning(f"Invalid list ID: {task_details['list_id']}")
                     return None
             
@@ -1052,7 +1344,9 @@ Active Tasks: {context['task_count']}
                 "title": task_details.get("title", "Untitled Task"),
                 "description": task_details.get("description"),
                 "workspace_id": task_details.get("workspace_id"),
+                "workspace_name": workspace_name,
                 "list_id": task_details.get("list_id"),
+                "list_name": list_name,
                 "priority": task_details.get("priority", "medium"),
                 "status": "todo",
                 "due_date": task_details.get("due_date"),

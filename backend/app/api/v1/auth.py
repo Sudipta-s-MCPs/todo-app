@@ -294,6 +294,7 @@ async def login(
             is_admin=is_admin_user(user),
             approval_status=user.approval_status,
             two_factor_enabled=user.two_factor_enabled,
+            auth_provider=user.auth_provider,
             created_at=user.created_at,
             last_active_at=user.last_active_at
         )

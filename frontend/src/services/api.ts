@@ -1,8 +1,20 @@
 import axios, { AxiosError } from 'axios';
 import { useAuthStore } from '../store/authStore';
+import { getDeviceInfo } from '../utils/deviceId';
 
 // Get API URL from environment or default to local
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5482/api/v1';
+
+// Store device info
+let deviceInfo: { deviceId: string; deviceName: string; deviceType: string } | null = null;
+
+// Initialize device info
+getDeviceInfo().then(info => {
+  deviceInfo = info;
+  console.log('Device info initialized:', info);
+}).catch(err => {
+  console.error('Failed to initialize device info:', err);
+});
 
 // Create axios instance
 export const api = axios.create({
@@ -12,13 +24,30 @@ export const api = axios.create({
   },
 });
 
-// Request interceptor to add auth token
+// Request interceptor to add auth token and device info
 api.interceptors.request.use(
-  (config) => {
+  async (config) => {
+    // Add auth token
     const token = useAuthStore.getState().accessToken;
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
+    
+    // Add device info
+    if (!deviceInfo) {
+      try {
+        deviceInfo = await getDeviceInfo();
+      } catch (err) {
+        console.error('Failed to get device info:', err);
+      }
+    }
+    
+    if (deviceInfo) {
+      config.headers['X-Device-ID'] = deviceInfo.deviceId;
+      config.headers['X-Device-Name'] = deviceInfo.deviceName;
+      config.headers['X-Device-Type'] = deviceInfo.deviceType;
+    }
+    
     return config;
   },
   (error) => {

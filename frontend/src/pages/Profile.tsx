@@ -23,6 +23,8 @@ import {
   ListItemText,
   ListItemSecondaryAction,
   Chip,
+  Card,
+  CardContent,
 } from '@mui/material';
 import {
   Edit as EditIcon,
@@ -34,6 +36,8 @@ import {
   VisibilityOff,
   Delete as DeleteIcon,
   Devices as DevicesIcon,
+  Computer as ComputerIcon,
+  Smartphone as SmartphoneIcon,
 } from '@mui/icons-material';
 import { useForm, Controller } from 'react-hook-form';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -43,6 +47,7 @@ import { format } from 'date-fns';
 import { authService } from '../services/authService';
 import { useAuthStore } from '../store/authStore';
 import type { UserDevice } from '../types';
+import { getDeviceInfo } from '../utils/deviceId';
 
 interface ProfileFormData {
   name: string;
@@ -71,6 +76,16 @@ export default function Profile() {
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
+  const [currentDeviceInfo, setCurrentDeviceInfo] = useState<any>(null);
+  
+  // Get current device info on mount
+  useEffect(() => {
+    getDeviceInfo().then(info => {
+      setCurrentDeviceInfo(info);
+    }).catch(err => {
+      console.error('Failed to get device info:', err);
+    });
+  }, []);
 
   // Profile form
   const {
@@ -505,6 +520,37 @@ export default function Profile() {
                 )}
               </Grid>
             </Box>
+            
+            {currentDeviceInfo && (
+              <>
+                <Divider sx={{ my: 3 }} />
+                <Box>
+                  <Typography variant="h6" gutterBottom>
+                    Current Device
+                  </Typography>
+                  <Card variant="outlined" sx={{ bgcolor: 'action.hover' }}>
+                    <CardContent>
+                      <Box display="flex" alignItems="center" gap={1} mb={1}>
+                        {currentDeviceInfo.deviceType === 'pwa' ? <SmartphoneIcon /> : <ComputerIcon />}
+                        <Typography variant="subtitle1">
+                          {currentDeviceInfo.deviceName}
+                        </Typography>
+                        <Chip label="This Device" size="small" color="primary" />
+                      </Box>
+                      <Typography variant="body2" color="text.secondary">
+                        Device ID: {currentDeviceInfo.deviceId}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        Type: {currentDeviceInfo.deviceType === 'pwa' ? 'Installed App (PWA)' : 'Web Browser'}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        First seen: {format(new Date(currentDeviceInfo.createdAt), 'PPp')}
+                      </Typography>
+                    </CardContent>
+                  </Card>
+                </Box>
+              </>
+            )}
           </Paper>
         </Grid>
       </Grid>

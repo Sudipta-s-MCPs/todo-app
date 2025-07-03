@@ -218,6 +218,9 @@ async def login(
     else:
         device.last_used_at = datetime.utcnow()
         device.last_ip_address = request.client.host
+        # Update device name if it has changed from "Unknown Device"
+        if device.device_name == "Unknown Device" and device_name != "Unknown Device":
+            device.device_name = device_name
     
     # Create session
     session = UserSession(

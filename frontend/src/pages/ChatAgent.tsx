@@ -124,8 +124,10 @@ export default function ChatAgent() {
       // Add assistant response
       setMessages(prev => [...prev, response.message]);
       
-      // Update suggested tasks if any
-      if (response.tasks && response.tasks.length > 0) {
+      // Update suggested tasks only for task creation actions
+      if (response.tasks && response.tasks.length > 0 && 
+          (response.action === 'suggested' || response.action === 'suggest_task' || 
+           response.action === 'created' || response.action === 'task_suggestion')) {
         setSuggestedTasks(response.tasks);
       }
       
@@ -134,11 +136,14 @@ export default function ChatAgent() {
         setAiUsageToday(prev => ({ ...prev, used: prev.used + 1 }));
       }
       
-      // Show notification only when tasks are actually created (not suggested)
+      // Show notification only when tasks are actually created (not suggested or listed)
       if (response.action === 'created' && response.tasks && response.tasks.length > 0) {
         enqueueSnackbar('Task created successfully', { variant: 'success' });
       } else if (response.action === 'suggested' || response.action === 'suggest_task') {
         // Don't show notification for suggestions - they'll be shown in preview
+      } else if (response.action === 'list_tasks' || response.action === 'list_priority_tasks' || 
+                 response.action === 'list_due_tasks' || response.action === 'list_workspace_tasks') {
+        // Don't show notification for listing tasks - they're already shown in the message
       }
       
     } catch (error: any) {

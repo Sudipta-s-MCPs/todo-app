@@ -70,6 +70,7 @@ export default function Profile() {
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [avatarUploading, setAvatarUploading] = useState(false);
 
   // Profile form
   const {
@@ -168,9 +169,35 @@ export default function Profile() {
     },
   });
 
+  const uploadAvatarMutation = useMutation({
+    mutationFn: (file: File) => authService.uploadAvatar(file),
+    onSuccess: async (data) => {
+      // Update user with new avatar URL
+      if (user) {
+        const updatedUser = { ...user, avatar_url: data.avatar_url };
+        updateUser(updatedUser);
+        queryClient.invalidateQueries({ queryKey: ['current-user'] });
+        enqueueSnackbar('Profile photo updated successfully', { variant: 'success' });
+      }
+      setAvatarUploading(false);
+    },
+    onError: (error: any) => {
+      enqueueSnackbar(error.response?.data?.detail || 'Failed to upload photo', {
+        variant: 'error',
+      });
+      setAvatarUploading(false);
+    },
+  });
+
   // Handlers
   const handleProfileSave = async (data: ProfileFormData) => {
-    await updateProfileMutation.mutateAsync(data);
+    // Only send fields that can be updated
+    const updateData = {
+      name: data.name,
+      timezone: data.timezone,
+      locale: data.locale,
+    };
+    await updateProfileMutation.mutateAsync(updateData);
   };
 
   const handlePasswordChange = async (data: PasswordFormData) => {
@@ -200,6 +227,26 @@ export default function Profile() {
   const handleRevokeDevice = async (deviceId: string) => {
     if (window.confirm('Are you sure you want to revoke access for this device?')) {
       await revokeDeviceMutation.mutateAsync(deviceId);
+    }
+  };
+
+  const handleAvatarChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      // Validate file size (max 5MB)
+      if (file.size > 5 * 1024 * 1024) {
+        enqueueSnackbar('Image must be less than 5MB', { variant: 'error' });
+        return;
+      }
+      
+      // Validate file type
+      if (!file.type.startsWith('image/')) {
+        enqueueSnackbar('Please select an image file', { variant: 'error' });
+        return;
+      }
+      
+      setAvatarUploading(true);
+      await uploadAvatarMutation.mutateAsync(file);
     }
   };
 
@@ -242,14 +289,25 @@ export default function Profile() {
               <Chip label="Admin" color="primary" size="small" sx={{ mt: 1 }} />
             )}
             <Box mt={2}>
-              <Button
-                variant="outlined"
-                size="small"
-                startIcon={<PhotoCameraIcon />}
-                disabled
-              >
-                Change Photo
-              </Button>
+              <input
+                accept="image/*"
+                id="avatar-upload"
+                type="file"
+                style={{ display: 'none' }}
+                onChange={handleAvatarChange}
+                disabled={avatarUploading}
+              />
+              <label htmlFor="avatar-upload">
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={avatarUploading ? <CircularProgress size={16} /> : <PhotoCameraIcon />}
+                  disabled={avatarUploading}
+                  component="span"
+                >
+                  {avatarUploading ? 'Uploading...' : 'Change Photo'}
+                </Button>
+              </label>
             </Box>
           </Paper>
         </Grid>
@@ -302,22 +360,16 @@ export default function Profile() {
                 <Controller
                   name="email"
                   control={profileControl}
-                  rules={{
-                    required: 'Email is required',
-                    pattern: {
-                      value: /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i,
-                      message: 'Invalid email address',
-                    },
-                  }}
                   render={({ field }) => (
                     <TextField
                       {...field}
                       label="Email"
                       type="email"
                       fullWidth
-                      disabled={!isEditing}
-                      error={!!profileErrors.email}
-                      helperText={profileErrors.email?.message}
+                      disabled={true}
+                      InputProps={{
+                        readOnly: true,
+                      }}
                     />
                   )}
                 />
@@ -375,22 +427,22 @@ export default function Profile() {
                   </Grid>
                 </Grid>
 
-                <Controller
-                  name="two_factor_enabled"
-                  control={profileControl}
-                  render={({ field }) => (
-                    <FormControlLabel
-                      control={
-                        <Switch
-                          {...field}
-                          checked={field.value}
-                          disabled={!isEditing}
-                        />
-                      }
-                      label="Two-factor authentication"
-                    />
+                <Box>
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={user?.two_factor_enabled || false}
+                        disabled={true}
+                      />
+                    }
+                    label="Two-factor authentication"
+                  />
+                  {!user?.two_factor_enabled && (
+                    <Typography variant="caption" color="text.secondary" display="block" sx={{ ml: 4 }}>
+                      Two-factor authentication adds an extra layer of security to your account
+                    </Typography>
                   )}
-                />
+                </Box>
               </Stack>
             </form>
 
@@ -401,13 +453,21 @@ export default function Profile() {
                 Security
               </Typography>
               <Stack spacing={2}>
-                <Button
-                  variant="outlined"
-                  startIcon={<PasswordIcon />}
-                  onClick={() => setPasswordDialogOpen(true)}
-                >
-                  Change Password
-                </Button>
+                {user.auth_provider === 'local' ? (
+                  <Button
+                    variant="outlined"
+                    startIcon={<PasswordIcon />}
+                    onClick={() => setPasswordDialogOpen(true)}
+                  >
+                    Change Password
+                  </Button>
+                ) : (
+                  <Alert severity="info" icon={<PasswordIcon />}>
+                    {user.auth_provider === 'ldap' 
+                      ? 'Password changes for LDAP accounts must be done through your organization\'s LDAP system.'
+                      : 'Password changes are managed by your OAuth provider.'}
+                  </Alert>
+                )}
                 <Button
                   variant="outlined"
                   startIcon={<DevicesIcon />}
@@ -450,7 +510,18 @@ export default function Profile() {
       </Grid>
 
       {/* Change Password Dialog */}
-      <Dialog open={passwordDialogOpen} onClose={() => setPasswordDialogOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog 
+        open={passwordDialogOpen} 
+        onClose={() => {
+          setPasswordDialogOpen(false);
+          resetPassword();
+          setShowCurrentPassword(false);
+          setShowNewPassword(false);
+          setShowConfirmPassword(false);
+        }} 
+        maxWidth="sm" 
+        fullWidth
+      >
         <form onSubmit={handlePasswordSubmit(handlePasswordChange)}>
           <DialogTitle>Change Password</DialogTitle>
           <DialogContent dividers>
@@ -545,7 +616,13 @@ export default function Profile() {
             </Stack>
           </DialogContent>
           <DialogActions>
-            <Button onClick={() => setPasswordDialogOpen(false)}>Cancel</Button>
+            <Button onClick={() => {
+              setPasswordDialogOpen(false);
+              resetPassword();
+              setShowCurrentPassword(false);
+              setShowNewPassword(false);
+              setShowConfirmPassword(false);
+            }}>Cancel</Button>
             <Button
               type="submit"
               variant="contained"

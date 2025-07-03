@@ -36,7 +36,17 @@ export const authService = {
   },
   
   async updateProfile(data: Partial<User>): Promise<User> {
-    const response = await api.put<User>('/auth/me', data);
+    const params = new URLSearchParams();
+    if (data.name) params.append('name', data.name);
+    if (data.timezone) params.append('timezone', data.timezone);
+    if (data.locale) params.append('locale', data.locale);
+    if (data.avatar_url !== undefined) params.append('avatar_url', data.avatar_url || '');
+    
+    const response = await api.put<User>('/auth/me', params, {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+    });
     return response.data;
   },
   
@@ -72,5 +82,17 @@ export const authService = {
   
   async revokeDevice(deviceId: string): Promise<void> {
     await api.delete(`/auth/devices/${deviceId}`);
+  },
+  
+  async uploadAvatar(file: File): Promise<{ avatar_url: string }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    const response = await api.post<{ avatar_url: string }>('/auth/avatar', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+    return response.data;
   },
 };

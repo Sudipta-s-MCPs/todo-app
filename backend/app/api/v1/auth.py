@@ -5,7 +5,7 @@ Created: 2025-01-30 14:14:00 PST
 
 from datetime import datetime, timedelta
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, UploadFile, File
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
@@ -13,6 +13,8 @@ import pyotp
 import qrcode
 import io
 import base64
+import hashlib
+from PIL import Image
 
 from app.database import get_db
 from app.models.user import User, UserDevice, UserSession, APIKey, MCPAgent, DeviceType, AccessMethod
@@ -519,6 +521,80 @@ async def change_password(
     await db.commit()
     
     return {"message": "Password changed successfully"}
+
+
+@router.post("/avatar")
+async def upload_avatar(
+    request: Request,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Upload user avatar"""
+    # Validate file type
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File must be an image"
+        )
+    
+    # Validate file size (max 5MB)
+    contents = await file.read()
+    if len(contents) > 5 * 1024 * 1024:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Image must be less than 5MB"
+        )
+    
+    # Validate image format
+    try:
+        image = Image.open(io.BytesIO(contents))
+        # Convert to RGB if necessary
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+        
+        # Resize if too large (max 512x512)
+        max_size = (512, 512)
+        image.thumbnail(max_size, Image.Resampling.LANCZOS)
+        
+        # Convert to base64 data URL
+        buffered = io.BytesIO()
+        image.save(buffered, format="JPEG", quality=85)
+        img_base64 = base64.b64encode(buffered.getvalue()).decode()
+        avatar_url = f"data:image/jpeg;base64,{img_base64}"
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid image format"
+        )
+    
+    # Update user avatar
+    current_user.avatar_url = avatar_url
+    current_user.updated_at = datetime.utcnow()
+    
+    # Log activity
+    access_method, device_id, session_id, _, _ = await get_access_info_direct(
+        request, db
+    )
+    await log_activity(
+        db=db,
+        user_id=current_user.id,
+        action_type=ActionType.PROFILE_UPDATE.value,
+        resource_type=ResourceType.USER,
+        resource_id=current_user.id,
+        device_id=device_id,
+        session_id=session_id,
+        access_method=access_method,
+        ip_address=request.client.host,
+        user_agent=request.headers.get("User-Agent"),
+        details={"action": "avatar_upload"}
+    )
+    
+    await db.commit()
+    await db.refresh(current_user)
+    
+    return {"avatar_url": current_user.avatar_url}
 
 
 @router.get("/devices", response_model=list[DeviceInfo])

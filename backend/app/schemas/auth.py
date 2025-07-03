@@ -153,6 +153,7 @@ class UserInfo(BaseModel):
     is_admin: bool
     approval_status: str
     two_factor_enabled: bool
+    auth_provider: str  # local, ldap, oauth
     created_at: datetime
     last_active_at: Optional[datetime]
     

@@ -44,7 +44,7 @@ class User(Base):
     email = Column(String(255), unique=True, nullable=False, index=True)
     name = Column(String(255), nullable=False)
     password_hash = Column(String(255), nullable=True)  # Nullable for LDAP users
-    avatar_url = Column(String(500), nullable=True)
+    avatar_url = Column(Text, nullable=True)
     settings_json = Column(JSON, default=dict)
     
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

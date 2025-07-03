@@ -28,7 +28,6 @@ import {
   Person as PersonIcon,
   Logout as LogoutIcon,
   Notifications as NotificationsIcon,
-  Settings as SettingsIcon,
   ChevronLeft as ChevronLeftIcon,
   SmartToy as AIIcon,
 } from '@mui/icons-material';
@@ -150,7 +149,10 @@ export default function Layout() {
             onClick={handleProfileMenuOpen}
             color="inherit"
           >
-            <Avatar sx={{ width: 32, height: 32 }}>
+            <Avatar 
+              sx={{ width: 32, height: 32 }}
+              src={user?.avatar_url}
+            >
               {user?.name.charAt(0).toUpperCase()}
             </Avatar>
           </IconButton>
@@ -175,12 +177,6 @@ export default function Layout() {
                 <PersonIcon fontSize="small" />
               </ListItemIcon>
               Profile
-            </MenuItem>
-            <MenuItem component={Link} to="/settings" onClick={handleProfileMenuClose}>
-              <ListItemIcon>
-                <SettingsIcon fontSize="small" />
-              </ListItemIcon>
-              Settings
             </MenuItem>
             <Divider />
             <MenuItem onClick={handleLogout}>

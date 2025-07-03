@@ -19,6 +19,7 @@ export interface User {
   created_at: string;
   last_active_at?: string;
   is_admin: boolean;
+  auth_provider?: 'local' | 'ldap' | 'oauth';
 }
 
 // Auth Types

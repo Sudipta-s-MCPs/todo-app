@@ -20,6 +20,8 @@ from app.schemas.auth import UserInfo
 from app.schemas.admin import UserAdminCreate, UserAdminUpdate
 from app.utils.security import get_password_hash
 from app.services.email_service import email_service
+import hashlib
+import os
 
 router = APIRouter()
 
@@ -618,6 +620,259 @@ async def delete_mcp_agent(
     return {"message": f"MCP agent {agent.agent_identifier} deleted successfully"}
 
 
+@router.post("/mcp/register", response_model=Dict[str, Any])
+async def register_mcp_agent_admin(
+    request: Dict[str, Any],
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Register a new MCP agent for a user (admin only)
+    
+    Request body:
+    {
+        "user_id": "uuid",
+        "agent_name": "My MCP Client",
+        "description": "Claude Code on MacBook",
+        "capabilities": ["task_management", "smart_todo_manager"]
+    }
+    """
+    # Extract request data
+    user_id = request.get("user_id")
+    agent_name = request.get("agent_name", "MCP Agent")
+    description = request.get("description", "")
+    capabilities = request.get("capabilities", [
+        "task_management",
+        "list_management",
+        "search",
+        "duplicate_detection",
+        "smart_todo_manager"
+    ])
+    
+    # Validate user
+    user = await db.get(User, user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Generate unique agent identifier
+    import secrets
+    agent_identifier = f"mcp_{user_id[:8]}_{secrets.token_hex(8)}"
+    
+    # Create API key for the agent
+    api_key_value = f"mcp_{secrets.token_urlsafe(32)}"
+    api_key_hash = hashlib.sha256(api_key_value.encode()).hexdigest()
+    
+    # Create API key record
+    api_key = APIKey(
+        user_id=user.id,
+        name=f"MCP: {agent_name}",
+        key_hash=api_key_hash,
+        permissions=["mcp:full"],
+        is_active=True
+    )
+    db.add(api_key)
+    
+    # Create MCP agent record
+    mcp_agent = MCPAgent(
+        user_id=user.id,
+        agent_name=agent_name,
+        agent_identifier=agent_identifier,
+        capabilities=capabilities,
+        is_active=True
+    )
+    db.add(mcp_agent)
+    
+    # Commit to generate IDs
+    await db.commit()
+    await db.refresh(mcp_agent)
+    await db.refresh(api_key)
+    
+    # Log activity after commit so we have the IDs
+    activity = ActivityLog(
+        user_id=admin.id,
+        action_type=ActionType.API_KEY_CREATE.value,
+        resource_type="mcp_agent",
+        resource_id=str(mcp_agent.id),
+        access_method=AccessMethod.WEB.value,
+        details={
+            "agent_name": agent_name,
+            "for_user": user.email,
+            "capabilities": capabilities
+        }
+    )
+    db.add(activity)
+    await db.commit()
+    
+    # Generate configurations for different MCP clients
+    mcp_endpoint = os.getenv("MCP_ENDPOINT", "http://localhost:5485/mcp")
+    
+    configurations = {
+        "claude_code": {
+            "format": "command",
+            "content": {
+                "command": f"claude mcp add --transport http smart-todo {mcp_endpoint} --header \"X-API-Key: {api_key_value}\" --header \"X-Device-ID: {agent_identifier}\" --header \"X-Device-Name: {agent_name}\" --header \"X-User-ID: {str(user.id)}\"",
+                "instructions": [
+                    "1. Open your terminal",
+                    "2. Run the command below to add the Smart-ToDo MCP server:",
+                    "3. Verify connection with: claude mcp list",
+                    "4. Check status with: /mcp in Claude Code"
+                ]
+            }
+        },
+        "claude_desktop": {
+            "format": "json",
+            "content": {
+                "mcpServers": {
+                    "smart-todo": {
+                        "command": "npx",
+                        "args": [
+                            "mcp-remote",
+                            mcp_endpoint
+                        ],
+                        "env": {
+                            "TODO_API_KEY": api_key_value,
+                            "TODO_USER_ID": str(user.id),
+                            "TODO_DEVICE_ID": agent_identifier,
+                            "TODO_DEVICE_NAME": agent_name
+                        }
+                    }
+                },
+                "instructions": [
+                    "1. Install Node.js if not already installed",
+                    "2. Install mcp-remote: npm install -g mcp-remote (or use npx)",
+                    "3. Add this configuration to ~/Library/Application Support/Claude/claude_desktop_config.json (macOS) or %APPDATA%\\Claude\\claude_desktop_config.json (Windows)",
+                    "4. Restart Claude Desktop"
+                ]
+            }
+        },
+        "vscode": {
+            "format": "json",
+            "content": {
+                "mcp.servers": {
+                    "smart-todo": {
+                        "command": "npx",
+                        "args": [
+                            "mcp-remote",
+                            mcp_endpoint
+                        ],
+                        "environment": {
+                            "TODO_API_KEY": api_key_value,
+                            "TODO_USER_ID": str(user.id),
+                            "TODO_DEVICE_ID": agent_identifier,
+                            "TODO_DEVICE_NAME": agent_name
+                        }
+                    }
+                },
+                "instructions": "Add this to your VS Code settings.json. Requires the MCP extension and Node.js."
+            }
+        },
+        "generic": {
+            "format": "json",
+            "content": {
+                "mcp_endpoint": mcp_endpoint,
+                "transport": "http",
+                "authentication": {
+                    "api_key": api_key_value,
+                    "user_id": str(user.id),
+                    "device_id": agent_identifier,
+                    "device_name": agent_name
+                },
+                "headers": {
+                    "X-API-Key": api_key_value,
+                    "X-Device-ID": agent_identifier,
+                    "X-Device-Name": agent_name,
+                    "X-User-ID": str(user.id)
+                }
+            }
+        }
+    }
+    
+    return {
+        "agent": {
+            "id": str(mcp_agent.id),
+            "agent_identifier": agent_identifier,
+            "name": agent_name,
+            "description": description,
+            "capabilities": capabilities,
+            "is_active": True,
+            "created_at": mcp_agent.created_at.isoformat()
+        },
+        "configurations": configurations,
+        "message": "MCP agent registered successfully"
+    }
+
+
+@router.get("/mcp/agents/{agent_id}/config", response_model=Dict[str, Any])
+async def get_mcp_agent_config(
+    agent_id: str,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get configuration for an existing MCP agent"""
+    
+    # Get the agent
+    agent = await db.get(MCPAgent, agent_id)
+    if not agent:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="MCP agent not found"
+        )
+    
+    # Get user
+    user = await db.get(User, agent.user_id)
+    
+    # Note: We can't retrieve the actual API key value after creation
+    # This endpoint returns configuration templates with placeholders
+    agent_name = agent.agent_name or "MCP Agent"
+    
+    configurations = {
+        "claude_code": {
+            "format": "command",
+            "content": {
+                "command": f"claude mcp add --transport http smart-todo {os.getenv('MCP_ENDPOINT', 'http://localhost:5485/mcp')} --header \"X-API-Key: <YOUR_API_KEY>\" --header \"X-Device-ID: {agent.agent_identifier}\" --header \"X-Device-Name: {agent_name}\" --header \"X-User-ID: {str(user.id)}\"",
+                "instructions": [
+                    "1. Open your terminal", 
+                    "2. Replace <YOUR_API_KEY> with the API key provided during registration",
+                    "3. Run the command below to add the Smart-ToDo MCP server:",
+                    "4. Verify connection with: claude mcp list",
+                    "5. Check status with: /mcp in Claude Code"
+                ]
+            }
+        },
+        "claude_desktop": {
+            "format": "json",
+            "content": {
+                "mcpServers": {
+                    "smart-todo": {
+                        "command": "python",
+                        "args": ["-m", "mcp_server.server"],
+                        "env": {
+                            "TODO_API_KEY": "<YOUR_API_KEY>",
+                            "TODO_USER_ID": str(user.id),
+                            "TODO_DEVICE_ID": agent.agent_identifier,
+                            "TODO_DEVICE_NAME": agent_name
+                        }
+                    }
+                }
+            }
+        },
+        "info": {
+            "agent_id": str(agent.id),
+            "agent_identifier": agent.agent_identifier,
+            "user_email": user.email,
+            "created_at": agent.created_at.isoformat(),
+            "note": "API key cannot be retrieved after creation. Use the key provided during registration."
+        }
+    }
+    
+    return {
+        "configurations": configurations
+    }
+
+
 # API Key Management Endpoints
 @router.get("/api-keys", response_model=Dict[str, Any])
 async def get_all_api_keys(
@@ -656,7 +911,7 @@ async def get_all_api_keys(
             "id": str(key.id),
             "name": key.name,
             "key_preview": key.key_hash[:8] + "...",  # Show first 8 chars
-            "scopes": key.scopes,
+            "scopes": key.permissions,
             "is_active": key.is_active,
             "last_used_at": key.last_used_at.isoformat() if key.last_used_at else None,
             "expires_at": key.expires_at.isoformat() if key.expires_at else None,

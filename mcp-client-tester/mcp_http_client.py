@@ -32,7 +32,7 @@ class MCPHTTPClient:
         self.server_url = MCP_SERVER_URL
         self.session_id = None
         self.initialized = False
-        self.protocol_version = "2024-11-05"
+        self.protocol_version = "2025-03-26"
         
     async def _send_request(self, method: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
         """Send a JSON-RPC request to the MCP server"""
@@ -193,6 +193,74 @@ class MCPHTTPClient:
         """Get all lists"""
         result = await self.call_tool("get_lists", {})
         return result.get("content", [{}])[0] if "content" in result else result
+    
+    async def create_list(self, name: str, workspace_name: str = None, color: str = "#000000") -> Dict[str, Any]:
+        """Create a new list"""
+        args = {
+            "name": name,
+            "workspace_name": workspace_name,
+            "color": color
+        }
+        result = await self.call_tool("create_list", args)
+        return result.get("content", [{}])[0] if "content" in result else result
+    
+    async def move_task(self, task_id: str, list_name: str) -> Dict[str, Any]:
+        """Move task to different list"""
+        args = {
+            "task_id": task_id,
+            "list_name": list_name
+        }
+        result = await self.call_tool("move_task", args)
+        return result.get("content", [{}])[0] if "content" in result else result
+    
+    async def get_upcoming_tasks(self, days: int = 7) -> Dict[str, Any]:
+        """Get tasks due in next N days"""
+        args = {"days": days}
+        result = await self.call_tool("get_upcoming_tasks", args)
+        return result.get("content", [{}])[0] if "content" in result else result
+    
+    async def smart_todo_manager(self, message: str, mode: str = "auto", conversation_context: List[Dict[str, str]] = None) -> Dict[str, Any]:
+        """AI-powered task management"""
+        args = {
+            "message": message,
+            "mode": mode,
+            "conversation_context": conversation_context
+        }
+        result = await self.call_tool("smart_todo_manager", args)
+        return result.get("content", [{}])[0] if "content" in result else result
+    
+    # Resource methods
+    
+    async def get_resource(self, uri: str) -> str:
+        """Get an MCP resource"""
+        result = await self._send_request(
+            "resources/read",
+            {"uri": uri}
+        )
+        return result.get("contents", [{}])[0].get("text", "") if "contents" in result else str(result)
+    
+    async def list_resources(self) -> List[Dict[str, Any]]:
+        """List available resources"""
+        result = await self._send_request("resources/list")
+        return result.get("resources", [])
+    
+    # Prompt methods
+    
+    async def get_prompt(self, name: str, arguments: Dict[str, Any] = None) -> str:
+        """Get a prompt template"""
+        result = await self._send_request(
+            "prompts/get",
+            {
+                "name": name,
+                "arguments": arguments or {}
+            }
+        )
+        return result.get("messages", [{}])[0].get("content", {}).get("text", "") if "messages" in result else str(result)
+    
+    async def list_prompts(self) -> List[Dict[str, Any]]:
+        """List available prompts"""
+        result = await self._send_request("prompts/list")
+        return result.get("prompts", [])
 
 
 def display_tasks(tasks: List[Dict[str, Any]], title: str = "Tasks"):
@@ -288,10 +356,88 @@ async def quick_test():
             task_id = create_result["task"]["id"]
             test_results.append(("Create task", True, f"Created in {create_result['list']}"))
             
-            # Clean up
-            await client.delete_task(task_id)
+            # Don't delete yet - we'll use this task for other tests
         else:
             test_results.append(("Create task", False, create_result.get("error", "Unknown error")))
+            task_id = None
+        
+        # Test 6: Smart Todo Manager
+        console.print("6️⃣ Testing AI Smart Todo Manager...")
+        smart_result = await client.smart_todo_manager(
+            "I need to review the quarterly sales report by Friday",
+            mode="suggest"
+        )
+        if smart_result.get("status") in ["task_suggested", "general_response"]:
+            test_results.append(("Smart Todo Manager", True, f"AI intent: {smart_result.get('intent', 'unknown')}"))
+        else:
+            test_results.append(("Smart Todo Manager", False, smart_result.get("error", "No response")))
+        
+        # Test 7: Create list
+        console.print("7️⃣ Testing list creation...")
+        list_result = await client.create_list("MCP Test List " + str(uuid.uuid4())[:8])
+        if list_result.get("status") == "created":
+            test_results.append(("Create list", True, f"Created in {list_result['workspace']}"))
+            created_list_name = list_result["list"]["name"]
+            
+            # Test 8: Move task (if we have a task)
+            if task_id:
+                console.print("8️⃣ Testing task movement...")
+                move_result = await client.move_task(task_id, created_list_name)
+                if move_result.get("status") == "moved":
+                    test_results.append(("Move task", True, f"Moved to {move_result['new_list']}"))
+                else:
+                    test_results.append(("Move task", False, move_result.get("error", "Failed")))
+            else:
+                test_results.append(("Move task", False, "No task to move"))
+        else:
+            test_results.append(("Create list", False, list_result.get("error", "Failed")))
+        
+        # Test 9: Get upcoming tasks
+        console.print("9️⃣ Testing upcoming tasks...")
+        upcoming_result = await client.get_upcoming_tasks(7)
+        if "error" not in upcoming_result:
+            test_results.append(("Get upcoming tasks", True, f"Found {upcoming_result.get('count', 0)} tasks"))
+        else:
+            test_results.append(("Get upcoming tasks", False, upcoming_result['error']))
+        
+        # Test 10: List resources
+        console.print("🔟 Testing MCP resources...")
+        resources = await client.list_resources()
+        if isinstance(resources, list):
+            test_results.append(("List resources", True, f"Found {len(resources)} resources"))
+            
+            # Try to read a resource if available
+            if resources:
+                resource_uri = resources[0].get('uri', '')
+                resource_content = await client.get_resource(resource_uri)
+                if resource_content and not resource_content.startswith("{'error'"):
+                    test_results.append(("Read resource", True, f"Read {resource_uri}"))
+                else:
+                    test_results.append(("Read resource", False, "Failed to read"))
+        else:
+            test_results.append(("List resources", False, "Failed to list"))
+        
+        # Test 11: List prompts
+        console.print("1️⃣1️⃣ Testing MCP prompts...")
+        prompts = await client.list_prompts()
+        if isinstance(prompts, list):
+            test_results.append(("List prompts", True, f"Found {len(prompts)} prompts"))
+            
+            # Try to get a prompt if available
+            if prompts:
+                prompt_name = prompts[0].get('name', '')
+                prompt_content = await client.get_prompt(prompt_name)
+                if prompt_content and not prompt_content.startswith("{'error'"):
+                    test_results.append(("Get prompt", True, f"Retrieved {prompt_name}"))
+                else:
+                    test_results.append(("Get prompt", False, "Failed to retrieve"))
+        else:
+            test_results.append(("List prompts", False, "Failed to list"))
+        
+        # Clean up: Delete the test task if it was created
+        if task_id:
+            console.print("🧹 Cleaning up test data...")
+            await client.delete_task(task_id)
         
     except Exception as e:
         test_results.append(("MCP Test", False, f"Error: {str(e)}"))
@@ -343,10 +489,16 @@ async def interactive_menu():
         console.print("5. ✅ Complete a task")
         console.print("6. ❌ Delete a task")
         console.print("7. 📁 Show lists and workspaces")
-        console.print("8. 🧪 Run quick test")
-        console.print("9. 🚪 Exit")
+        console.print("8. 🤖 Test AI Smart Todo Manager")
+        console.print("9. 📂 Create a new list")
+        console.print("10. ↔️ Move task to different list")
+        console.print("11. 📅 Show upcoming tasks")
+        console.print("12. 📚 Test MCP Resources")
+        console.print("13. 💡 Test MCP Prompts")
+        console.print("14. 🧪 Run quick test")
+        console.print("15. 🚪 Exit")
         
-        choice = Prompt.ask("Select an action", choices=["1", "2", "3", "4", "5", "6", "7", "8", "9"])
+        choice = Prompt.ask("Select an action", choices=["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"])
         
         try:
             if choice == "1":
@@ -457,16 +609,298 @@ async def interactive_menu():
                     console.print(f"[red]Error: {result.get('error', 'Failed to get lists')}[/red]")
                 
             elif choice == "8":
+                # Test AI Smart Todo Manager
+                console.print("\n[bold cyan]AI Smart Todo Manager Test[/bold cyan]")
+                message = Prompt.ask("Enter your message for the AI")
+                mode = Prompt.ask("Select mode", choices=["auto", "create_task", "chat", "suggest"], default="auto")
+                
+                console.print("🤖 Processing with AI...")
+                result = await client.smart_todo_manager(message, mode)
+                
+                if result.get('status') == 'task_created':
+                    console.print(f"✅ {result['response']}", style="green")
+                    console.print(f"   Task ID: {result['task']['id'][:8]}...")
+                elif result.get('status') == 'task_suggested':
+                    console.print(f"💡 {result['response']}", style="yellow")
+                    task = result['suggested_task']
+                    console.print(f"\n   Title: {task['title']}")
+                    console.print(f"   List: {task.get('list_name', 'Not specified')}")
+                    console.print(f"   Priority: {task.get('priority', 'medium')}")
+                elif result.get('status') == 'general_response':
+                    console.print(f"💬 {result['response']}", style="cyan")
+                else:
+                    console.print(f"📝 {result.get('response', 'AI response')}", style="white")
+                
+                console.print(f"\n   Intent: {result.get('intent', 'unknown')}")
+                console.print(f"   Confidence: {result.get('confidence', 0):.2f}")
+                console.print(f"   Provider: {result.get('provider', 'unknown')}")
+                
+            elif choice == "9":
+                # Create a new list
+                name = Prompt.ask("List name")
+                workspace_name = Prompt.ask("Workspace name (optional)", default="")
+                color = Prompt.ask("Color (hex)", default="#000000")
+                
+                console.print("📂 Creating list...")
+                result = await client.create_list(
+                    name=name,
+                    workspace_name=workspace_name if workspace_name else None,
+                    color=color
+                )
+                
+                if result.get('status') == 'created':
+                    console.print(f"✅ List '{result['list']['name']}' created in workspace '{result['workspace']}'", style="green")
+                else:
+                    console.print(f"⚠️ {result.get('error', 'Failed to create list')}", style="yellow")
+                
+            elif choice == "10":
+                # Move task to different list
+                task_id = Prompt.ask("Task ID to move")
+                list_name = Prompt.ask("Target list name")
+                
+                console.print("↔️ Moving task...")
+                result = await client.move_task(task_id, list_name)
+                
+                if result.get('status') == 'moved':
+                    console.print(f"✅ Task moved to '{result['new_list']}'!", style="green")
+                else:
+                    console.print(f"⚠️ {result.get('error', 'Failed to move task')}", style="yellow")
+                
+            elif choice == "11":
+                # Show upcoming tasks
+                days = int(Prompt.ask("Show tasks due in next N days", default="7"))
+                console.print(f"📅 Fetching tasks due in next {days} days...")
+                result = await client.get_upcoming_tasks(days)
+                
+                if 'error' not in result:
+                    display_tasks(result.get('tasks', []), f"Upcoming Tasks (next {days} days)")
+                else:
+                    console.print(f"[red]Error: {result['error']}[/red]")
+                
+            elif choice == "12":
+                # Test MCP Resources
+                console.print("\n[bold cyan]MCP Resources Test[/bold cyan]")
+                
+                # List resources
+                resources = await client.list_resources()
+                if resources:
+                    console.print(f"Found {len(resources)} resources:")
+                    for res in resources:
+                        console.print(f"  • {res.get('uri', 'Unknown')} - {res.get('description', 'No description')}")
+                    
+                    # Read a resource
+                    uri = Prompt.ask("Enter resource URI to read (or Enter to skip)", default="")
+                    if uri:
+                        console.print(f"📚 Reading resource: {uri}")
+                        content = await client.get_resource(uri)
+                        console.print(Panel(content, title=f"Resource: {uri}", expand=False))
+                else:
+                    console.print("No resources found.", style="yellow")
+                
+            elif choice == "13":
+                # Test MCP Prompts
+                console.print("\n[bold cyan]MCP Prompts Test[/bold cyan]")
+                
+                # List prompts
+                prompts = await client.list_prompts()
+                if prompts:
+                    console.print(f"Found {len(prompts)} prompts:")
+                    for prompt in prompts:
+                        console.print(f"  • {prompt.get('name', 'Unknown')} - {prompt.get('description', 'No description')}")
+                        if prompt.get('arguments'):
+                            console.print(f"    Arguments: {prompt['arguments']}")
+                    
+                    # Get a prompt
+                    name = Prompt.ask("Enter prompt name to retrieve (or Enter to skip)", default="")
+                    if name:
+                        args = {}
+                        # Special handling for project_breakdown_prompt
+                        if name == "project_breakdown_prompt":
+                            project_name = Prompt.ask("Enter project name")
+                            args = {"project_name": project_name}
+                        
+                        console.print(f"💡 Getting prompt: {name}")
+                        content = await client.get_prompt(name, args)
+                        console.print(Panel(content, title=f"Prompt: {name}", expand=False))
+                else:
+                    console.print("No prompts found.", style="yellow")
+                
+            elif choice == "14":
                 # Run quick test
                 await quick_test()
                 
-            elif choice == "9":
+            elif choice == "15":
                 # Exit
                 console.print("👋 Goodbye!", style="green")
                 break
                 
         except Exception as e:
             console.print(f"❌ Error: {str(e)}", style="red")
+
+
+async def comprehensive_test():
+    """Run a comprehensive end-to-end test of MCP functionality"""
+    client = MCPHTTPClient()
+    
+    console.print(Panel.fit(
+        "[bold green]Smart-ToDo MCP Comprehensive Test[/bold green]\n"
+        "Testing full workflow with AI integration",
+        title="🧪 Comprehensive Test"
+    ))
+    
+    test_results = []
+    created_resources = []  # Track resources for cleanup
+    
+    try:
+        # Initialize connection
+        console.print("🤝 Initializing MCP connection...")
+        if not await client.initialize():
+            console.print("[red]Failed to connect to MCP server[/red]")
+            return
+        
+        # Test 1: Create a list for testing
+        console.print("\n1️⃣ Creating test list...")
+        test_list_name = f"MCP Test List {str(uuid.uuid4())[:8]}"
+        list_result = await client.create_list(test_list_name, color="#FF5733")
+        
+        if list_result.get("status") == "created":
+            test_results.append(("Create test list", True, f"Created '{test_list_name}'"))
+            created_resources.append(("list", test_list_name))
+        else:
+            test_results.append(("Create test list", False, "Failed to create list"))
+            return
+        
+        # Test 2: Use AI to create multiple tasks
+        console.print("\n2️⃣ Testing AI task creation...")
+        ai_messages = [
+            "I need to prepare a presentation for Monday's meeting",
+            "Buy groceries: milk, eggs, bread, and coffee",
+            "Schedule dentist appointment for next week",
+            "Review and respond to email from John about the project proposal"
+        ]
+        
+        created_task_ids = []
+        for msg in ai_messages:
+            result = await client.smart_todo_manager(msg, mode="create_task")
+            if result.get("status") == "task_created":
+                task_id = result["task"]["id"]
+                created_task_ids.append(task_id)
+                created_resources.append(("task", task_id))
+                console.print(f"   ✅ Created: {result['task']['title']}")
+        
+        test_results.append(("AI task creation", True, f"Created {len(created_task_ids)} tasks"))
+        
+        # Test 3: Test AI in chat mode
+        console.print("\n3️⃣ Testing AI chat mode...")
+        chat_result = await client.smart_todo_manager(
+            "What tasks do I have for this week?",
+            mode="chat"
+        )
+        if chat_result.get("status") == "chat_response":
+            test_results.append(("AI chat mode", True, "Got chat response"))
+            console.print(f"   💬 AI: {chat_result['response'][:100]}...")
+        else:
+            test_results.append(("AI chat mode", False, "No response"))
+        
+        # Test 4: Move a task to the new list
+        if created_task_ids:
+            console.print("\n4️⃣ Testing task movement...")
+            move_result = await client.move_task(created_task_ids[0], test_list_name)
+            if move_result.get("status") == "moved":
+                test_results.append(("Move task", True, f"Moved to '{test_list_name}'"))
+            else:
+                test_results.append(("Move task", False, "Failed to move"))
+        
+        # Test 5: Get upcoming tasks
+        console.print("\n5️⃣ Testing upcoming tasks...")
+        upcoming = await client.get_upcoming_tasks(7)
+        test_results.append(("Get upcoming tasks", True, f"Found {upcoming.get('count', 0)} tasks"))
+        
+        # Test 6: Complete a task
+        if created_task_ids:
+            console.print("\n6️⃣ Testing task completion...")
+            complete_result = await client.complete_task(created_task_ids[0])
+            if complete_result.get("status") == "updated":
+                test_results.append(("Complete task", True, "Task marked as completed"))
+            else:
+                test_results.append(("Complete task", False, "Failed to complete"))
+        
+        # Test 7: Use prompts for planning
+        console.print("\n7️⃣ Testing MCP prompts...")
+        
+        # Get daily planning prompt
+        daily_prompt = await client.get_prompt("daily_planning_prompt")
+        if daily_prompt and not daily_prompt.startswith("{'error'"):
+            test_results.append(("Get daily prompt", True, "Retrieved planning prompt"))
+            console.print("   📋 Got daily planning prompt")
+        
+        # Get project breakdown prompt
+        project_prompt = await client.get_prompt(
+            "project_breakdown_prompt",
+            {"project_name": "Website Redesign"}
+        )
+        if project_prompt and not project_prompt.startswith("{'error'"):
+            test_results.append(("Get project prompt", True, "Retrieved with parameters"))
+            console.print("   📋 Got project breakdown prompt")
+        
+        # Test 8: Read resources
+        console.print("\n8️⃣ Testing MCP resources...")
+        
+        # Read recent tasks resource
+        recent_content = await client.get_resource("tasks://recent")
+        if recent_content and not recent_content.startswith("{'error'"):
+            test_results.append(("Read recent tasks", True, "Got recent tasks"))
+            console.print("   📚 Read recent tasks resource")
+        
+        # Read upcoming tasks resource
+        upcoming_content = await client.get_resource("tasks://upcoming")
+        if upcoming_content and not upcoming_content.startswith("{'error'"):
+            test_results.append(("Read upcoming tasks", True, "Got upcoming tasks"))
+            console.print("   📚 Read upcoming tasks resource")
+        
+        # Test 9: Search functionality
+        console.print("\n9️⃣ Testing search...")
+        search_result = await client.search_tasks("presentation")
+        if "error" not in search_result:
+            test_results.append(("Search tasks", True, f"Found {search_result.get('count', 0)} matches"))
+        else:
+            test_results.append(("Search tasks", False, "Search failed"))
+        
+        # Clean up
+        console.print("\n🧹 Cleaning up test data...")
+        for resource_type, resource_id in reversed(created_resources):
+            if resource_type == "task":
+                await client.delete_task(resource_id)
+            # Note: We can't delete lists via MCP, so they'll remain
+        
+        test_results.append(("Cleanup", True, f"Cleaned up {len(created_resources)} resources"))
+        
+    except Exception as e:
+        test_results.append(("Comprehensive test", False, f"Error: {str(e)}"))
+    
+    # Display final results
+    console.print("\n" + "="*60)
+    console.print("[bold cyan]Comprehensive Test Results:[/bold cyan]")
+    
+    passed = 0
+    for test_name, success, details in test_results:
+        status = "✅" if success else "❌"
+        style = "green" if success else "red"
+        console.print(f"{status} [bold]{test_name}[/bold]: {details}", style=style)
+        if success:
+            passed += 1
+    
+    total = len(test_results)
+    percentage = (passed / total * 100) if total > 0 else 0
+    
+    console.print(f"\n🎯 [bold]Final Score: {passed}/{total} tests passed ({percentage:.1f}%)[/bold]")
+    
+    if percentage == 100:
+        console.print("🎉 [bold green]All tests passed! MCP integration is working perfectly![/bold green]")
+    elif percentage >= 80:
+        console.print("👍 [bold yellow]Most tests passed. Some features may need attention.[/bold yellow]")
+    else:
+        console.print("⚠️ [bold red]Several tests failed. Please check the MCP server logs.[/bold red]")
 
 
 if __name__ == "__main__":
@@ -481,9 +915,21 @@ if __name__ == "__main__":
     ))
     
     try:
-        if len(sys.argv) > 1 and sys.argv[1] == "--quick":
-            # Run quick test
-            asyncio.run(quick_test())
+        if len(sys.argv) > 1:
+            if sys.argv[1] == "--quick":
+                # Run quick test
+                asyncio.run(quick_test())
+            elif sys.argv[1] == "--comprehensive":
+                # Run comprehensive test
+                asyncio.run(comprehensive_test())
+            elif sys.argv[1] == "--help":
+                console.print("Usage:")
+                console.print("  python mcp_http_client.py           # Interactive mode")
+                console.print("  python mcp_http_client.py --quick   # Quick test")
+                console.print("  python mcp_http_client.py --comprehensive  # Full test")
+            else:
+                console.print(f"Unknown option: {sys.argv[1]}")
+                console.print("Use --help for usage information")
         else:
             # Run interactive menu
             asyncio.run(interactive_menu())

@@ -12,7 +12,7 @@ import asyncio
 from functools import lru_cache
 
 import redis.asyncio as redis
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.services.cache import get_redis_client
 from app.utils.logging import get_logger
@@ -39,6 +39,18 @@ class TaskAnalysis(BaseModel):
     suggested_priority: Optional[str] = None
     suggested_due_date: Optional[str] = None
     extracted_entities: Optional[Dict[str, Any]] = None
+    provider_used: Optional[str] = None
+
+
+class ConversationResponse(BaseModel):
+    """Result of AI conversation processing"""
+    intent: str  # greeting|task_creation|task_query|general_query|clarification|other
+    use_pattern: bool = False
+    pattern_command: Optional[str] = None
+    response: str
+    needs_clarification: bool = False
+    task_details: Optional[Dict[str, Any]] = None
+    confidence: float = 0.0
     provider_used: Optional[str] = None
 
 
@@ -494,6 +506,199 @@ Provide suggestions in JSON format:
             "clarity_score": 0.5,
             "actionability_score": 0.5
         }
+    
+    async def analyze_task_intent(
+        self,
+        text: str,
+        workspaces: List[Dict[str, Any]],
+        lists: List[Dict[str, Any]],
+        existing_tasks: Optional[List[Dict[str, Any]]] = None,
+        user_id: str = None
+    ) -> Dict[str, Any]:
+        """
+        Analyze text to determine task-related intent and extract details
+        
+        Returns dict with:
+        - is_task_related: bool
+        - action: "create" | "update" | "query" | "complete"
+        - task_details: extracted task information
+        - suggestions: list of suggestions
+        """
+        # Use parse_natural_task for task extraction
+        analysis = await self.parse_natural_task(text, workspaces, lists, user_id or "system")
+        
+        # Check for duplicate if existing tasks provided
+        is_duplicate = False
+        duplicate_suggestions = []
+        
+        if existing_tasks and analysis.suggested_title:
+            dup_analysis = await self.analyze_duplicate(
+                analysis.suggested_title,
+                existing_tasks[:10],  # Check against recent tasks
+                user_id or "system"
+            )
+            is_duplicate = dup_analysis.is_duplicate
+            if is_duplicate:
+                duplicate_suggestions.append({
+                    "action": dup_analysis.suggested_action,
+                    "reasoning": dup_analysis.reasoning
+                })
+        
+        return {
+            "is_task_related": bool(analysis.suggested_title),
+            "action": "create" if analysis.suggested_title else "unknown",
+            "task_details": {
+                "title": analysis.suggested_title,
+                "description": None,
+                "workspace_id": analysis.suggested_workspace,
+                "list_id": analysis.suggested_list,
+                "priority": analysis.suggested_priority or "medium",
+                "due_date": analysis.suggested_due_date
+            } if analysis.suggested_title else None,
+            "is_duplicate": is_duplicate,
+            "suggestions": duplicate_suggestions,
+            "confidence": analysis.confidence,
+            "provider_used": analysis.provider_used
+        }
+    
+    async def process_conversation(
+        self,
+        message: str,
+        user_context: Dict[str, Any],
+        conversation_history: Optional[List[Dict[str, Any]]] = None,
+        mode: str = "chat",
+        user_id: str = None
+    ) -> ConversationResponse:
+        """
+        Unified conversation processing for all interfaces
+        
+        Args:
+            message: User's input message
+            user_context: Contains workspaces, lists, task counts, etc.
+            conversation_history: Previous messages for context
+            mode: "chat" | "mcp" | "api" - Interface type for tailored responses
+            user_id: User ID for usage tracking
+        
+        Returns:
+            ConversationResponse with intent, response, and optional task details
+        """
+        # Check cache
+        cache_content = f"{mode}:{message}:{json.dumps(user_context, sort_keys=True)}"
+        cache_key = self._get_cache_key("conversation", cache_content)
+        cached = await self._get_cached_response(cache_key)
+        if cached:
+            return ConversationResponse(**cached)
+        
+        # Format conversation history
+        conversation_history_str = ""
+        if conversation_history:
+            conversation_history_str = "Recent conversation:\n"
+            for msg in conversation_history[-6:]:  # Only use last 6 messages
+                role = "User" if msg.get("role") == "user" else "Assistant"
+                conversation_history_str += f"{role}: {msg.get('content', '')}\n"
+        else:
+            conversation_history_str = "This is the start of the conversation."
+        
+        # Create comprehensive prompt
+        system_prompt = f"""You are a friendly and helpful AI assistant for Smart ToDo, a task management app. You help users manage their tasks, workspaces, and lists while maintaining a natural, conversational tone.
+
+IMPORTANT GUIDELINES:
+1. Be conversational and friendly - respond like a helpful personal assistant, not a robot
+2. Handle greetings warmly (hi, hello, hey, good morning, etc.)
+3. When users say things like "I need to..." or "I have to...", understand they want to create a task
+4. For TASK CREATION: Always use task_details, NOT pattern commands. Extract all context like workspace, list, priority from the request
+5. Only use pattern commands for simple operations like listing tasks or marking tasks complete
+6. Ask for clarification when requests are unclear
+7. Keep responses concise but friendly
+8. Interface mode: {mode} - adjust formality accordingly
+
+Pattern commands are ONLY for these simple operations:
+- Task listing: "show tasks", "list tasks", "show [priority] priority tasks"
+- Task completion: "complete task [name]", "mark [task] as done"
+- Workspace operations: "show workspaces"
+
+For task creation, ALWAYS set:
+- intent: "task_creation"
+- use_pattern: false
+- task_details with extracted information
+
+CRITICAL: When setting pattern_command, replace placeholders with ACTUAL values from the user's request.
+
+CONVERSATION CONTEXT:
+{conversation_history_str}
+
+USER CONTEXT:
+{json.dumps(user_context, indent=2)}
+
+Analyze the user's request and respond with:
+{{
+    "intent": "greeting|task_creation|task_query|general_query|clarification|other",
+    "use_pattern": true/false,
+    "pattern_command": "exact command if use_pattern is true",
+    "response": "friendly, natural response to user",
+    "needs_clarification": true/false,
+    "task_details": {{ // only if creating a task
+        "title": "task title",
+        "description": "optional description",
+        "workspace_id": "workspace UUID",
+        "list_id": "list UUID",
+        "priority": "low|medium|high",
+        "due_date": "ISO date or null"
+    }},
+    "confidence": 0.0-1.0
+}}"""
+        
+        prompt = f"User request: {message}"
+        
+        # Check usage
+        estimated_tokens = len(prompt.split()) * 2 + len(system_prompt.split())
+        redis_client = await get_redis_client()
+        usage_tracker = UsageTracker(redis_client)
+        
+        if user_id and not await usage_tracker.check_and_update_usage(user_id, estimated_tokens):
+            # Return basic response without AI
+            return ConversationResponse(
+                intent="other",
+                use_pattern=False,
+                response="I'm currently unable to process your request due to usage limits. Please try again later.",
+                confidence=0.0,
+                provider_used="none"
+            )
+        
+        # Ensure providers are initialized
+        await self._ensure_initialized()
+        
+        if not self._providers:
+            return ConversationResponse(
+                intent="other",
+                use_pattern=False,
+                response="I'm not properly configured yet. Please contact your administrator.",
+                confidence=0.0,
+                provider_used="none"
+            )
+        
+        # Try each provider in priority order
+        for provider in self._providers:
+            result = await self._call_provider(provider, prompt, system_prompt)
+            if result:
+                try:
+                    response = ConversationResponse(**result)
+                    response.provider_used = provider.get_name()
+                    # Cache the response
+                    await self._cache_response(cache_key, response.model_dump())
+                    return response
+                except Exception as e:
+                    logger.error(f"Failed to parse response from {provider.get_name()}: {str(e)}")
+                    continue
+        
+        # All providers failed - return fallback
+        return ConversationResponse(
+            intent="other",
+            use_pattern=False,
+            response="I'm having trouble understanding your request. Could you please rephrase it?",
+            confidence=0.0,
+            provider_used="failed"
+        )
 
 
 # Singleton instance

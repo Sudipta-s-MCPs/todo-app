@@ -1010,7 +1010,7 @@ I use AI to understand natural language, but also have pattern matching for comm
         user_id: str, 
         db: AsyncSession
     ) -> Dict[str, Any]:
-        """Process message with AI, which can decide to use pattern matching or create tasks."""
+        """Process message with AI using centralized AI service."""
         try:
             # Get user's context (workspaces, lists, tasks)
             context = await self._get_user_context(user_id, db)
@@ -1018,167 +1018,63 @@ I use AI to understand natural language, but also have pattern matching for comm
             # Get recent chat history for conversational context
             chat_history = await self._get_chat_history(user_id, db, limit=10)
             
-            # Create a comprehensive prompt that includes available commands
-            system_prompt = """You are a friendly and helpful AI assistant for Smart ToDo, a task management app. You help users manage their tasks, workspaces, and lists while maintaining a natural, conversational tone.
-
-IMPORTANT GUIDELINES:
-1. Be conversational and friendly - respond like a helpful personal assistant, not a robot
-2. Handle greetings warmly (hi, hello, hey, good morning, etc.)
-3. When users say things like "I need to..." or "I have to...", understand they want to create a task
-4. For TASK CREATION: Always use task_details, NOT pattern commands. Extract all context like workspace, list, priority from the request
-5. Only use pattern commands for simple operations like listing tasks or marking tasks complete
-6. Ask for clarification when requests are unclear
-7. Keep responses concise but friendly
-
-Pattern commands are ONLY for these simple operations:
-- Task listing: "show tasks", "list tasks", "show [priority] priority tasks"
-- Task completion: "complete task [name]", "mark [task] as done"
-- Workspace operations: "show workspaces"
-
-For task creation, ALWAYS set:
-- intent: "task_creation"
-- use_pattern: false
-- task_details with extracted information (title, workspace_id, list_id, priority, etc.)
-
-CRITICAL: When setting pattern_command, you MUST replace placeholders like [name], [task], [priority] with the ACTUAL values from the user's request.
-For example:
-- User: "mark the Fix profile page task as done" → pattern_command: "mark Fix profile page as done" (NOT "complete task [name]")
-- User: "create task buy milk" → pattern_command: "create task buy milk" (NOT "create task [name]")
-- User: "show high priority tasks" → pattern_command: "show high priority tasks" (NOT "show [priority] priority tasks")
-
-CONVERSATION CONTEXT:
-{conversation_history}
-
-USER CONTEXT:
-{context}
-
-Analyze the user's request considering the conversation history and respond with:
-{{{{
-    "intent": "greeting|task_creation|task_query|general_query|clarification|other",
-    "use_pattern": true/false,
-    "pattern_command": "exact command if use_pattern is true",
-    "response": "friendly, natural response to user",
-    "needs_clarification": true/false,
-    "task_details": {{{{ // only if creating a task
-        "title": "task title",
-        "description": "optional description",
-        "workspace_id": "workspace UUID",
-        "list_id": "list UUID",
-        "priority": "low|medium|high",
-        "due_date": "ISO date or null"
-    }}}},
-    "confidence": 0.0-1.0
-}}}}
-
-Examples:
-- User: "Hi" → intent: "greeting", use_pattern: false, response: "Hello! I'm here to help you manage your tasks. What would you like to do today?"
-- User: "I need to buy groceries" → intent: "task_creation", use_pattern: false, task_details: {{"title": "buy groceries", "workspace_id": "[first workspace id]", "list_id": "[default list id]", "priority": "medium"}}, response: "I'll create a task for buying groceries."
-- User: "create a task to add voice button in chat in ToDo app workspace frontend list" → intent: "task_creation", use_pattern: false, task_details: {{"title": "add voice button in chat", "workspace_id": "[ToDo app workspace id]", "list_id": "[frontend list id]", "priority": "medium"}}, response: "I'll create a task to add a voice button in the chat feature."
-- User: "mark the Fix profile page task as done" → intent: "task_completion", use_pattern: true, pattern_command: "mark Fix profile page as done", response: "I'll mark that task as complete for you."
-- User: "What can you do?" → intent: "general_query", use_pattern: false, response: "I can help you create and manage tasks, organize them in workspaces, set priorities and due dates, and keep track of what needs to be done. Just tell me what you need!"
-"""
-
-            # Format conversation history
-            conversation_history_str = ""
-            if chat_history:
-                conversation_history_str = "Recent conversation:\n"
-                for msg in chat_history[-6:]:  # Only use last 6 messages for context
-                    role = "User" if msg["role"] == "user" else "Assistant"
-                    conversation_history_str += f"{role}: {msg['content']}\n"
-            else:
-                conversation_history_str = "This is the start of the conversation."
-            
-            # Format context for prompt
-            context_str = f"""
-Workspaces: {', '.join([f"{w['name']} (ID: {w['id']})" for w in context['workspaces']])}
-Lists: {', '.join([f"{l['name']} in {l['workspace_name']} (ID: {l['id']})" for l in context['lists']])}
-Active Tasks: {context['task_count']}
-
-When creating tasks, use the actual workspace and list IDs from above. Match workspace/list names mentioned by the user to their IDs.
-IMPORTANT: Be flexible with name matching:
-- "ToDo app workspace" or "todo app" → match "ToDo App" workspace
-- "frontend list" or "frontend" → match "Frontend Task Lists"
-- Use partial matching and be case-insensitive
-"""
-
-            # Call AI service
+            # Use centralized AI service
             ai_service = get_ai_service()
-            await ai_service._ensure_initialized()
+            ai_response = await ai_service.process_conversation(
+                message=content,
+                user_context=context,
+                conversation_history=chat_history,
+                mode="chat",
+                user_id=user_id
+            )
             
-            logger.info(f"AI service initialized with {len(ai_service._providers)} providers")
+            logger.info(f"AI response: intent={ai_response.intent}, use_pattern={ai_response.use_pattern}, provider={ai_response.provider_used}")
             
-            # Try each provider in priority order
-            for provider in ai_service._providers:
-                try:
-                    logger.info(f"Trying provider: {provider.get_name()}")
-                    response = await ai_service._call_provider(
-                        provider,
-                        f"User request: {content}",
-                        system_prompt.format(
-                            conversation_history=conversation_history_str,
-                            context=context_str
-                        )
-                    )
-                    
-                    if response:
-                        logger.info(f"Provider {provider.get_name()} returned response: {response}")
-                        
-                        # Process AI response
-                        if response.get("use_pattern", False) and response.get("pattern_command"):
-                            # AI decided to use pattern matching
-                            logger.info(f"AI decided to use pattern matching: {response['pattern_command']}")
-                            pattern_result = await self._execute_pattern_command(
-                                response["pattern_command"], user_id, db
-                            )
-                            if pattern_result:
-                                return {
-                                    "success": True,
-                                    "response": pattern_result["response"],
-                                    "type": pattern_result.get("type", "success"),
-                                    "action": pattern_result.get("action"),
-                                    "tasks": pattern_result.get("tasks"),
-                                    "confidence": response.get("confidence", 0.9),
-                                    "provider": provider.get_name()
-                                }
-                        
-                        elif response.get("intent") == "task_creation" and response.get("task_details"):
-                            # AI wants to create a task
-                            logger.info(f"AI wants to create task: {response['task_details']}")
-                            task_result = await self._create_task_from_ai(
-                                response["task_details"], user_id, db
-                            )
-                            return {
-                                "success": True,
-                                "response": response.get("response", "Task created successfully"),
-                                "type": "task",
-                                "action": "suggested",
-                                "tasks": [task_result] if task_result else None,
-                                "confidence": response.get("confidence", 0.9),
-                                "provider": provider.get_name()
-                            }
-                        
-                        else:
-                            # General response
-                            logger.info(f"AI provided general response")
-                            return {
-                                "success": True,
-                                "response": response.get("response", "I understand your request."),
-                                "type": "success",
-                                "action": "response",
-                                "confidence": response.get("confidence", 0.9),
-                                "provider": provider.get_name()
-                            }
-                    else:
-                        logger.warning(f"Provider {provider.get_name()} returned no response")
-                        
-                except Exception as e:
-                    logger.warning(f"Provider {provider.get_name()} failed: {str(e)}", exc_info=True)
-                    continue
+            # Process AI response
+            if ai_response.use_pattern and ai_response.pattern_command:
+                # AI decided to use pattern matching
+                logger.info(f"AI decided to use pattern matching: {ai_response.pattern_command}")
+                pattern_result = await self._execute_pattern_command(
+                    ai_response.pattern_command, user_id, db
+                )
+                if pattern_result:
+                    return {
+                        "success": True,
+                        "response": pattern_result["response"],
+                        "type": pattern_result.get("type", "success"),
+                        "action": pattern_result.get("action"),
+                        "tasks": pattern_result.get("tasks"),
+                        "confidence": ai_response.confidence,
+                        "provider": ai_response.provider_used
+                    }
             
-            # All providers failed
-            logger.error(f"All AI providers failed for message: '{content[:50]}...'")
-            logger.error(f"Available providers: {[p.get_name() for p in ai_service._providers] if ai_service._providers else 'None'}")
-            return {"success": False}
+            elif ai_response.intent == "task_creation" and ai_response.task_details:
+                # AI wants to create a task
+                logger.info(f"AI wants to create task: {ai_response.task_details}")
+                task_result = await self._create_task_from_ai(
+                    ai_response.task_details, user_id, db
+                )
+                return {
+                    "success": True,
+                    "response": ai_response.response,
+                    "type": "task_suggestion",
+                    "action": "suggest_task",
+                    "tasks": [task_result] if task_result else None,
+                    "confidence": ai_response.confidence,
+                    "provider": ai_response.provider_used
+                }
+            
+            else:
+                # General response
+                logger.info(f"AI provided general response")
+                return {
+                    "success": True,
+                    "response": ai_response.response,
+                    "type": "success",
+                    "action": "response",
+                    "confidence": ai_response.confidence,
+                    "provider": ai_response.provider_used
+                }
             
         except Exception as e:
             logger.error(f"AI unified processing error: {str(e)}")

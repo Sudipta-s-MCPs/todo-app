@@ -13,6 +13,7 @@ import {
   DialogContent,
   DialogActions,
   Alert,
+  Tooltip,
 } from '@mui/material'
 import { DataGrid, GridColDef, GridRenderCellParams, GridPaginationModel } from '@mui/x-data-grid'
 import {
@@ -23,9 +24,11 @@ import {
   AccessTime as AccessTimeIcon,
   CheckCircle as ActiveIcon,
   Cancel as InactiveIcon,
+  Settings as ConfigIcon,
 } from '@mui/icons-material'
 import { format } from 'date-fns'
 import { api } from '../services/api'
+import McpRegistrationWizard from '../components/McpRegistrationWizard'
 
 interface MCPAgent {
   id: string
@@ -46,6 +49,7 @@ export default function MCPClients() {
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
   const [openDialog, setOpenDialog] = useState(false)
+  const [openWizard, setOpenWizard] = useState(false)
   const [selectedAgent, setSelectedAgent] = useState<MCPAgent | null>(null)
   const [error, setError] = useState('')
   const [totalAgents, setTotalAgents] = useState(0)
@@ -53,6 +57,8 @@ export default function MCPClients() {
     page: 0,
     pageSize: 10,
   })
+  const [agentConfig, setAgentConfig] = useState<any>(null)
+  const [configLoading, setConfigLoading] = useState(false)
 
   useEffect(() => {
     fetchAgents()
@@ -91,6 +97,25 @@ export default function MCPClients() {
     } catch (error) {
       setError('Failed to delete MCP agent')
     }
+  }
+
+  const fetchAgentConfig = async (agentId: string) => {
+    setConfigLoading(true)
+    try {
+      const response = await api.get(`/admin/mcp/agents/${agentId}/config`)
+      setAgentConfig(response.data.configurations)
+    } catch (error) {
+      console.error('Failed to fetch agent config:', error)
+      setError('Failed to load agent configuration')
+    } finally {
+      setConfigLoading(false)
+    }
+  }
+
+  const handleViewConfig = async (agent: MCPAgent) => {
+    setSelectedAgent(agent)
+    await fetchAgentConfig(agent.id)
+    setOpenDialog(true)
   }
 
   const isAgentOnline = (lastActiveAt: string | null) => {
@@ -201,16 +226,28 @@ export default function MCPClients() {
     {
       field: 'actions',
       headerName: 'Actions',
-      width: 100,
+      width: 120,
       sortable: false,
       renderCell: (params: GridRenderCellParams) => (
-        <IconButton
-          size="small"
-          onClick={() => handleDeleteAgent(params.row.id)}
-          color="error"
-        >
-          <DeleteIcon />
-        </IconButton>
+        <Box>
+          <Tooltip title="View Configuration">
+            <IconButton
+              size="small"
+              onClick={() => handleViewConfig(params.row)}
+            >
+              <ConfigIcon />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Delete Agent">
+            <IconButton
+              size="small"
+              onClick={() => handleDeleteAgent(params.row.id)}
+              color="error"
+            >
+              <DeleteIcon />
+            </IconButton>
+          </Tooltip>
+        </Box>
       ),
     },
   ]
@@ -222,10 +259,7 @@ export default function MCPClients() {
         <Button
           variant="contained"
           startIcon={<AddIcon />}
-          onClick={() => {
-            setSelectedAgent(null)
-            setOpenDialog(true)
-          }}
+          onClick={() => setOpenWizard(true)}
         >
           Register Agent
         </Button>
@@ -265,73 +299,92 @@ export default function MCPClients() {
           loading={loading}
           rowCount={totalAgents}
           paginationMode="server"
-          onRowClick={(params) => {
-            setSelectedAgent(params.row)
-            setOpenDialog(true)
-          }}
         />
       </Paper>
 
-      {/* Agent Details Dialog */}
-      <Dialog open={openDialog} onClose={() => setOpenDialog(false)} maxWidth="sm" fullWidth>
+      {/* Agent Configuration Dialog */}
+      <Dialog open={openDialog} onClose={() => {
+        setOpenDialog(false)
+        setAgentConfig(null)
+      }} maxWidth="md" fullWidth>
         <DialogTitle>
-          {selectedAgent ? 'MCP Agent Details' : 'Register New MCP Agent'}
+          MCP Agent Configuration
         </DialogTitle>
         <DialogContent>
-          {selectedAgent ? (
+          {selectedAgent && (
             <Box>
-              <TextField
-                margin="dense"
-                label="Agent Identifier"
-                fullWidth
-                variant="outlined"
-                value={selectedAgent.agent_identifier}
-                disabled
-                sx={{ mb: 2 }}
-              />
-              <TextField
-                margin="dense"
-                label="Capabilities"
-                fullWidth
-                variant="outlined"
-                value={selectedAgent.capabilities.join(', ')}
-                disabled
-                sx={{ mb: 2 }}
-              />
-              <TextField
-                margin="dense"
-                label="Owner"
-                fullWidth
-                variant="outlined"
-                value={`${selectedAgent.user.full_name} (${selectedAgent.user.email})`}
-                disabled
-                sx={{ mb: 2 }}
-              />
-              <Typography variant="subtitle2" gutterBottom>
-                Capabilities:
-              </Typography>
-              <Box display="flex" gap={0.5} flexWrap="wrap" mb={2}>
-                {selectedAgent.capabilities.map((cap) => (
-                  <Chip key={cap} label={cap} size="small" />
-                ))}
+              <Box sx={{ mb: 3 }}>
+                <Typography variant="subtitle2" gutterBottom>
+                  Agent Details
+                </Typography>
+                <Typography variant="body2">
+                  <strong>Identifier:</strong> {selectedAgent.agent_identifier}
+                </Typography>
+                <Typography variant="body2">
+                  <strong>Owner:</strong> {selectedAgent.user.full_name} ({selectedAgent.user.email})
+                </Typography>
+                <Typography variant="body2">
+                  <strong>Created:</strong> {format(new Date(selectedAgent.created_at), 'PPp')}
+                </Typography>
               </Box>
-              <Typography variant="subtitle2" gutterBottom>
-                API Key Status:
-              </Typography>
-              <Typography variant="body2">
-                No expiration (MCP tokens are persistent)
-              </Typography>
+
+              {configLoading ? (
+                <Typography>Loading configuration...</Typography>
+              ) : agentConfig ? (
+                <Box>
+                  <Alert severity="info" sx={{ mb: 2 }}>
+                    Use the configuration below in your MCP client. The API key was provided during registration and cannot be retrieved again.
+                  </Alert>
+                  {agentConfig.claude_code && (
+                    <Box sx={{ mb: 3 }}>
+                      <Typography variant="subtitle2" gutterBottom>
+                        Claude Code Configuration (.env)
+                      </Typography>
+                      <Paper sx={{ p: 2, bgcolor: 'grey.100' }}>
+                        <pre style={{ margin: 0, overflow: 'auto', fontSize: '0.875rem' }}>
+                          {agentConfig.claude_code.content}
+                        </pre>
+                      </Paper>
+                    </Box>
+                  )}
+                  {agentConfig.claude_desktop && (
+                    <Box sx={{ mb: 3 }}>
+                      <Typography variant="subtitle2" gutterBottom>
+                        Claude Desktop Configuration (JSON)
+                      </Typography>
+                      <Paper sx={{ p: 2, bgcolor: 'grey.100' }}>
+                        <pre style={{ margin: 0, overflow: 'auto', fontSize: '0.875rem' }}>
+                          {JSON.stringify(agentConfig.claude_desktop.content, null, 2)}
+                        </pre>
+                      </Paper>
+                    </Box>
+                  )}
+                </Box>
+              ) : (
+                <Alert severity="warning">
+                  Failed to load configuration. Please try again.
+                </Alert>
+              )}
             </Box>
-          ) : (
-            <Alert severity="info">
-              To register a new MCP agent, use the MCP setup script or API endpoint with proper authentication.
-            </Alert>
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setOpenDialog(false)}>Close</Button>
+          <Button onClick={() => {
+            setOpenDialog(false)
+            setAgentConfig(null)
+          }}>Close</Button>
         </DialogActions>
       </Dialog>
+
+      {/* Registration Wizard */}
+      <McpRegistrationWizard
+        open={openWizard}
+        onClose={() => setOpenWizard(false)}
+        onSuccess={() => {
+          setOpenWizard(false)
+          fetchAgents()
+        }}
+      />
     </Box>
   )
 }

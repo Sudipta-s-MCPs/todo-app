@@ -35,7 +35,7 @@ services:
     deploy:
       replicas: 1
       restart_policy:
-        condition: unless-stopped
+        condition: on-failure
         delay: 10s
         max_attempts: 3
       resources:
@@ -61,7 +61,7 @@ services:
     deploy:
       replicas: 1
       restart_policy:
-        condition: unless-stopped
+        condition: on-failure
         delay: 5s
         max_attempts: 3
       resources:
@@ -87,7 +87,7 @@ services:
     deploy:
       replicas: 1
       restart_policy:
-        condition: unless-stopped
+        condition: on-failure
         delay: 5s
         max_attempts: 3
       resources:
@@ -121,7 +121,7 @@ services:
     deploy:
       replicas: 1
       restart_policy:
-        condition: unless-stopped
+        condition: on-failure
         delay: 10s
         max_attempts: 3
       resources:

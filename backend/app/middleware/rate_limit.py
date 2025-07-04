@@ -9,8 +9,11 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 from typing import Optional, Callable
 import time
+import logging
 
-from app.services.cache import check_rate_limit
+from app.services.cache import check_rate_limit, get_redis_client
+
+logger = logging.getLogger(__name__)
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -34,44 +37,65 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.url.path in ["/health", "/docs", "/openapi.json", "/redoc"]:
             return await call_next(request)
         
+        # Check if Redis is available
+        redis_client = get_redis_client()
+        if not redis_client:
+            logger.warning("Redis unavailable - rate limiting disabled")
+            # Continue without rate limiting when Redis is unavailable
+            return await call_next(request)
+        
         # Get client identifier (IP address or authenticated user)
         client_id = self._get_client_id(request)
         
-        # Check burst rate limit (per second)
-        burst_key = f"rate_limit:burst:{client_id}"
-        burst_allowed, burst_remaining = await check_rate_limit(
-            burst_key, self.burst_size, 1
-        )
-        
-        if not burst_allowed:
-            return self._rate_limit_exceeded_response(request)
-        
-        # Check minute rate limit
-        minute_key = f"rate_limit:minute:{client_id}"
-        minute_allowed, minute_remaining = await check_rate_limit(
-            minute_key, self.requests_per_minute, 60
-        )
-        
-        if not minute_allowed:
-            return self._rate_limit_exceeded_response(request)
-        
-        # Check hourly rate limit
-        hour_key = f"rate_limit:hour:{client_id}"
-        hour_allowed, hour_remaining = await check_rate_limit(
-            hour_key, self.requests_per_hour, 3600
-        )
-        
-        if not hour_allowed:
-            return self._rate_limit_exceeded_response(request)
+        try:
+            # Check burst rate limit (per second)
+            burst_key = f"rate_limit:burst:{client_id}"
+            burst_allowed, burst_remaining = await check_rate_limit(
+                burst_key, self.burst_size, 1
+            )
+            
+            if not burst_allowed:
+                logger.info(f"Rate limit exceeded for {client_id} (burst)")
+                return self._rate_limit_exceeded_response(request)
+            
+            # Check minute rate limit
+            minute_key = f"rate_limit:minute:{client_id}"
+            minute_allowed, minute_remaining = await check_rate_limit(
+                minute_key, self.requests_per_minute, 60
+            )
+            
+            if not minute_allowed:
+                logger.info(f"Rate limit exceeded for {client_id} (minute)")
+                return self._rate_limit_exceeded_response(request)
+            
+            # Check hourly rate limit
+            hour_key = f"rate_limit:hour:{client_id}"
+            hour_allowed, hour_remaining = await check_rate_limit(
+                hour_key, self.requests_per_hour, 3600
+            )
+            
+            if not hour_allowed:
+                logger.info(f"Rate limit exceeded for {client_id} (hour)")
+                return self._rate_limit_exceeded_response(request)
+        except Exception as e:
+            logger.error(f"Error checking rate limits: {e}")
+            # If Redis fails during operation, continue without rate limiting
+            logger.warning("Rate limiting error - allowing request to proceed")
+            return await call_next(request)
         
         # Process request
         response = await call_next(request)
         
-        # Add rate limit headers
-        response.headers["X-RateLimit-Limit-Minute"] = str(self.requests_per_minute)
-        response.headers["X-RateLimit-Remaining-Minute"] = str(minute_remaining)
-        response.headers["X-RateLimit-Limit-Hour"] = str(self.requests_per_hour)
-        response.headers["X-RateLimit-Remaining-Hour"] = str(hour_remaining)
+        # Add rate limit headers only if we have the data
+        try:
+            if 'minute_remaining' in locals():
+                response.headers["X-RateLimit-Limit-Minute"] = str(self.requests_per_minute)
+                response.headers["X-RateLimit-Remaining-Minute"] = str(minute_remaining)
+            if 'hour_remaining' in locals():
+                response.headers["X-RateLimit-Limit-Hour"] = str(self.requests_per_hour)
+                response.headers["X-RateLimit-Remaining-Hour"] = str(hour_remaining)
+        except Exception as e:
+            logger.debug(f"Could not add rate limit headers: {e}")
         
         return response
     

@@ -85,7 +85,7 @@ services:
     ports:
       - "${MCP_PORT:-5485}:5485"
     environment:
-      - TODO_API_ENDPOINT=http://backend:8000/api/v1
+      - TODO_API_ENDPOINT=http://host.docker.internal:${BACKEND_PORT:-5482}/api/v1
       - MCP_SERVER_NAME=${MCP_SERVER_NAME:-TodoApp}
       - MCP_SERVER_VERSION=${MCP_SERVER_VERSION:-1.0.0}
       - PYTHONPATH=/app

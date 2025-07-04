@@ -65,40 +65,61 @@ class UsageTracker:
     
     async def check_and_update_usage(self, user_id: str, tokens: int) -> bool:
         """Check if usage is within limits and update counters"""
+        # If no Redis, allow all requests
+        if not self.redis:
+            return True
+            
         today = datetime.now().strftime("%Y-%m-%d")
         month = datetime.now().strftime("%Y-%m")
         
-        # Check daily limit
-        daily_key = f"ai_usage:daily:{today}"
-        daily_usage = await self.redis.get(daily_key) or 0
-        if int(daily_usage) + tokens > self.daily_limit:
-            logger.warning(f"Daily AI token limit exceeded: {daily_usage} + {tokens} > {self.daily_limit}")
-            return False
-        
-        # Check user monthly limit
-        user_monthly_key = f"ai_usage:user:{user_id}:{month}"
-        user_usage = await self.redis.get(user_monthly_key) or 0
-        if int(user_usage) + tokens > self.user_monthly_limit:
-            logger.warning(f"User {user_id} monthly token limit exceeded")
-            return False
-        
-        # Update counters
-        pipe = self.redis.pipeline()
-        pipe.incrby(daily_key, tokens)
-        pipe.expire(daily_key, 86400)  # 24 hours
-        pipe.incrby(user_monthly_key, tokens)
-        pipe.expire(user_monthly_key, 2592000)  # 30 days
-        await pipe.execute()
-        
-        return True
+        try:
+            # Check daily limit
+            daily_key = f"ai_usage:daily:{today}"
+            daily_usage = await self.redis.get(daily_key) or 0
+            if int(daily_usage) + tokens > self.daily_limit:
+                logger.warning(f"Daily AI token limit exceeded: {daily_usage} + {tokens} > {self.daily_limit}")
+                return False
+            
+            # Check user monthly limit
+            user_monthly_key = f"ai_usage:user:{user_id}:{month}"
+            user_usage = await self.redis.get(user_monthly_key) or 0
+            if int(user_usage) + tokens > self.user_monthly_limit:
+                logger.warning(f"User {user_id} monthly token limit exceeded")
+                return False
+            
+            # Update counters
+            pipe = self.redis.pipeline()
+            pipe.incrby(daily_key, tokens)
+            pipe.expire(daily_key, 86400)  # 24 hours
+            pipe.incrby(user_monthly_key, tokens)
+            pipe.expire(user_monthly_key, 2592000)  # 30 days
+            await pipe.execute()
+            
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to update usage: {e}")
+            return True  # Allow request on Redis failure
     
     async def get_usage_stats(self, user_id: str) -> Dict[str, int]:
         """Get current usage statistics"""
+        if not self.redis:
+            return {
+                "daily_usage": 0,
+                "user_monthly_usage": 0,
+                "daily_limit": self.daily_limit,
+                "user_monthly_limit": self.user_monthly_limit
+            }
+            
         today = datetime.now().strftime("%Y-%m-%d")
         month = datetime.now().strftime("%Y-%m")
         
-        daily_usage = await self.redis.get(f"ai_usage:daily:{today}") or 0
-        user_monthly_usage = await self.redis.get(f"ai_usage:user:{user_id}:{month}") or 0
+        try:
+            daily_usage = await self.redis.get(f"ai_usage:daily:{today}") or 0
+            user_monthly_usage = await self.redis.get(f"ai_usage:user:{user_id}:{month}") or 0
+        except Exception as e:
+            logger.warning(f"Failed to get usage stats: {e}")
+            daily_usage = 0
+            user_monthly_usage = 0
         
         return {
             "daily_usage": int(daily_usage),
@@ -199,21 +220,31 @@ class AIService:
     
     async def _get_cached_response(self, cache_key: str) -> Optional[Dict[str, Any]]:
         """Get cached AI response"""
-        redis_client = await get_redis_client()
-        cached = await redis_client.get(cache_key)
-        if cached:
-            logger.info(f"AI cache hit for key: {cache_key}")
-            return json.loads(cached)
+        redis_client = get_redis_client()
+        if not redis_client:
+            return None  # No cache available
+        try:
+            cached = await redis_client.get(cache_key)
+            if cached:
+                logger.info(f"AI cache hit for key: {cache_key}")
+                return json.loads(cached)
+        except Exception as e:
+            logger.warning(f"Cache get failed: {e}")
         return None
     
     async def _cache_response(self, cache_key: str, response: Dict[str, Any]):
         """Cache AI response"""
-        redis_client = await get_redis_client()
-        await redis_client.setex(
-            cache_key,
-            self.cache_ttl,
-            json.dumps(response)
-        )
+        redis_client = get_redis_client()
+        if not redis_client:
+            return  # No cache available
+        try:
+            await redis_client.setex(
+                cache_key,
+                self.cache_ttl,
+                json.dumps(response)
+            )
+        except Exception as e:
+            logger.warning(f"Cache set failed: {e}")
     
     async def analyze_duplicate(
         self,
@@ -254,7 +285,7 @@ Respond in JSON format:
         
         # Check usage limits
         estimated_tokens = len(prompt.split()) * 2  # Rough estimate
-        redis_client = await get_redis_client()
+        redis_client = get_redis_client()
         usage_tracker = UsageTracker(redis_client)
         
         if not await usage_tracker.check_and_update_usage(user_id, estimated_tokens):
@@ -373,7 +404,7 @@ Extract and respond in JSON format:
         
         # Check usage
         estimated_tokens = len(prompt.split()) * 2
-        redis_client = await get_redis_client()
+        redis_client = get_redis_client()
         usage_tracker = UsageTracker(redis_client)
         
         if not await usage_tracker.check_and_update_usage(user_id, estimated_tokens):
@@ -464,7 +495,7 @@ Provide suggestions in JSON format:
         
         # Check usage
         estimated_tokens = len(prompt.split()) * 2
-        redis_client = await get_redis_client()
+        redis_client = get_redis_client()
         usage_tracker = UsageTracker(redis_client)
         
         if not await usage_tracker.check_and_update_usage(user_id, estimated_tokens):
@@ -653,7 +684,7 @@ Analyze the user's request and respond with:
         
         # Check usage
         estimated_tokens = len(prompt.split()) * 2 + len(system_prompt.split())
-        redis_client = await get_redis_client()
+        redis_client = get_redis_client()
         usage_tracker = UsageTracker(redis_client)
         
         if user_id and not await usage_tracker.check_and_update_usage(user_id, estimated_tokens):
@@ -716,7 +747,9 @@ Analyze the user's request and respond with:
         from datetime import datetime, timedelta
         
         # Check usage limits
-        if not await self.usage_tracker.check_and_update_usage(user_id, 1000):
+        redis_client = get_redis_client()
+        usage_tracker = UsageTracker(redis_client)
+        if not await usage_tracker.check_and_update_usage(user_id, 1000):
             logger.warning(f"Usage limit exceeded for user {user_id}")
             # Return simple rule-based recommendations
             return self._get_rule_based_recommendations(all_tasks, limit)

@@ -30,8 +30,11 @@ async def lifespan(app: FastAPI):
     
     # Initialize Redis cache
     from app.services.cache import redis_cache
-    await redis_cache.connect()
-    logger.info("Redis cache initialized")
+    redis_connected = await redis_cache.connect()
+    if redis_connected:
+        logger.info("Redis cache initialized successfully")
+    else:
+        logger.warning("Redis cache initialization failed - running without cache")
     
     # Load dynamic settings from database
     try:
@@ -57,8 +60,11 @@ async def lifespan(app: FastAPI):
     logger.info("Database connections closed")
     
     # Disconnect Redis
-    await redis_cache.disconnect()
-    logger.info("Redis disconnected")
+    if redis_cache.redis_client:
+        await redis_cache.disconnect()
+        logger.info("Redis disconnected")
+    else:
+        logger.debug("Redis was not connected, skipping disconnect")
 
 
 # Create FastAPI app

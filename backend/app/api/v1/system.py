@@ -6,6 +6,7 @@ Created: 2025-01-30 18:57:00 PST
 import os
 import psutil
 import platform
+import time
 from datetime import datetime
 from typing import Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -148,21 +149,57 @@ async def get_system_health(
     try:
         # Import here to avoid circular imports
         from app.services.cache import redis_cache
-        if await redis_cache.ping():
-            health_status["checks"]["redis"] = {
-                "status": "healthy",
-                "message": "Redis connection successful"
-            }
-        else:
+        
+        # Check if Redis client exists first
+        if not redis_cache.redis_client:
+            health_status["status"] = "degraded"
             health_status["checks"]["redis"] = {
                 "status": "unhealthy",
-                "message": "Redis connection failed"
+                "message": "Redis client not initialized",
+                "details": {
+                    "connected": False,
+                    "url": redis_cache._sanitize_url(str(settings.REDIS_URL)) if hasattr(redis_cache, '_sanitize_url') else "redis://***"
+                }
+            }
+        elif await redis_cache.ping():
+            # Get additional Redis info if available
+            try:
+                info = await redis_cache.redis_client.info()
+                health_status["checks"]["redis"] = {
+                    "status": "healthy",
+                    "message": "Redis connection successful",
+                    "details": {
+                        "connected": True,
+                        "version": info.get("redis_version", "unknown"),
+                        "uptime_seconds": info.get("uptime_in_seconds", 0),
+                        "connected_clients": info.get("connected_clients", 0),
+                        "used_memory_human": info.get("used_memory_human", "unknown")
+                    }
+                }
+            except:
+                # Basic health check passed but couldn't get detailed info
+                health_status["checks"]["redis"] = {
+                    "status": "healthy",
+                    "message": "Redis connection successful"
+                }
+        else:
+            health_status["status"] = "degraded"
+            health_status["checks"]["redis"] = {
+                "status": "unhealthy",
+                "message": "Redis ping failed",
+                "details": {
+                    "connected": False
+                }
             }
     except Exception as e:
-        health_status["status"] = "unhealthy"
+        health_status["status"] = "degraded"
         health_status["checks"]["redis"] = {
             "status": "unhealthy",
-            "message": f"Redis connection failed: {str(e)}"
+            "message": f"Redis health check error: {str(e)}",
+            "details": {
+                "connected": False,
+                "error": str(e)
+            }
         }
     
     # Memory health check
@@ -680,6 +717,79 @@ async def get_services_status(
         }
     
     return services_status
+
+
+@router.get("/redis-status", response_model=Dict[str, Any])
+async def get_redis_status(
+    current_user: User = Depends(get_current_admin_user)
+):
+    """Get detailed Redis connection status and statistics (admin only)"""
+    from app.services.cache import redis_cache
+    
+    redis_status = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "connection": {
+            "url": redis_cache._sanitize_url(str(settings.REDIS_URL)) if hasattr(redis_cache, '_sanitize_url') else "redis://***",
+            "connected": False,
+            "client_exists": redis_cache.redis_client is not None
+        },
+        "statistics": {},
+        "performance": {}
+    }
+    
+    if not redis_cache.redis_client:
+        redis_status["connection"]["message"] = "Redis client not initialized"
+        return redis_status
+    
+    try:
+        # Test connection
+        start_time = time.time()
+        await redis_cache.redis_client.ping()
+        ping_time = (time.time() - start_time) * 1000  # Convert to ms
+        
+        redis_status["connection"]["connected"] = True
+        redis_status["connection"]["message"] = "Connected"
+        redis_status["performance"]["ping_ms"] = round(ping_time, 2)
+        
+        # Get Redis info
+        info = await redis_cache.redis_client.info()
+        
+        # Extract key statistics
+        redis_status["statistics"] = {
+            "version": info.get("redis_version", "unknown"),
+            "uptime_seconds": info.get("uptime_in_seconds", 0),
+            "uptime_days": info.get("uptime_in_days", 0),
+            "connected_clients": info.get("connected_clients", 0),
+            "used_memory_human": info.get("used_memory_human", "unknown"),
+            "used_memory_peak_human": info.get("used_memory_peak_human", "unknown"),
+            "total_connections_received": info.get("total_connections_received", 0),
+            "total_commands_processed": info.get("total_commands_processed", 0),
+            "instantaneous_ops_per_sec": info.get("instantaneous_ops_per_sec", 0),
+            "keyspace_hits": info.get("keyspace_hits", 0),
+            "keyspace_misses": info.get("keyspace_misses", 0),
+            "evicted_keys": info.get("evicted_keys", 0),
+            "expired_keys": info.get("expired_keys", 0)
+        }
+        
+        # Calculate hit rate
+        hits = info.get("keyspace_hits", 0)
+        misses = info.get("keyspace_misses", 0)
+        if hits + misses > 0:
+            redis_status["statistics"]["hit_rate_percent"] = round((hits / (hits + misses)) * 100, 2)
+        
+        # Get database stats
+        db_stats = {}
+        for key, value in info.items():
+            if key.startswith("db"):
+                db_stats[key] = value
+        redis_status["statistics"]["databases"] = db_stats
+        
+    except Exception as e:
+        redis_status["connection"]["connected"] = False
+        redis_status["connection"]["message"] = f"Connection error: {str(e)}"
+        redis_status["connection"]["error"] = str(e)
+    
+    return redis_status
 
 
 @router.get("/config", response_model=Dict[str, Any])

@@ -152,7 +152,7 @@ export default function Workspaces() {
   };
 
   const handleWorkspaceClick = (workspace: Workspace) => {
-    navigate(`/tasks?workspace=${workspace.id}`);
+    navigate(`/workspaces/${workspace.id}/lists`);
   };
 
   const handleManageLists = (workspace: Workspace) => {

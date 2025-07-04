@@ -137,15 +137,34 @@ export default function TaskCard({
             </Typography>
 
             {task.description && (
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              <Typography 
+                variant="body2" 
+                color="text.secondary" 
+                sx={{ 
+                  mb: 1,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  display: '-webkit-box',
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: 'vertical',
+                }}
+              >
                 {task.description}
               </Typography>
             )}
 
             <Box display="flex" alignItems="center" gap={1} flexWrap="wrap">
-              {task.workspace && (
+              {(task.workspace || task.list) && (
                 <Chip
-                  label={`${task.workspace.emoji || '📁'} ${task.workspace.name}`}
+                  label={
+                    task.workspace && task.list
+                      ? `${task.workspace.emoji || '📁'} ${task.workspace.name} / ${task.list.name}`
+                      : task.workspace
+                      ? `${task.workspace.emoji || '📁'} ${task.workspace.name}`
+                      : task.list
+                      ? `📋 ${task.list.name}`
+                      : ''
+                  }
                   size="small"
                   variant="outlined"
                 />
@@ -174,7 +193,7 @@ export default function TaskCard({
               ))}
               
               {/* Attachment and Comment indicators */}
-              {task.attachment_count && task.attachment_count > 0 && (
+              {task.attachment_count !== undefined && task.attachment_count > 0 && (
                 <Chip
                   icon={<AttachmentIcon />}
                   label={task.attachment_count}
@@ -183,7 +202,7 @@ export default function TaskCard({
                 />
               )}
               
-              {task.comment_count && task.comment_count > 0 && (
+              {task.comment_count !== undefined && task.comment_count > 0 && (
                 <Chip
                   icon={<CommentIcon />}
                   label={task.comment_count}

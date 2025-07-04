@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import {
   Container,
   Grid,
@@ -12,11 +11,7 @@ import {
   List,
   ListItem,
   ListItemText,
-  ListItemIcon,
-  IconButton,
   Button,
-  Menu,
-  MenuItem,
   Divider,
 } from '@mui/material';
 import {
@@ -25,35 +20,21 @@ import {
   TrendingUp as TrendingUpIcon,
   Folder as FolderIcon,
   CheckCircle as CheckCircleIcon,
-  RadioButtonUnchecked as RadioButtonUncheckedIcon,
-  MoreVert as MoreVertIcon,
   Flag as FlagIcon,
-  Edit as EditIcon,
-  Delete as DeleteIcon,
   ArrowForward as ArrowForwardIcon,
 } from '@mui/icons-material';
 import { format, isToday, isTomorrow, isPast } from 'date-fns';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { useSnackbar } from 'notistack';
 
 import { useAuthStore } from '../store/authStore';
 import { statsService } from '../services/statsService';
 import { taskService } from '../services/taskService';
-import { workspaceService } from '../services/workspaceService';
-import TaskDialog from '../components/TaskDialog';
-import type { Task, TaskUpdate } from '../types';
 
 export default function Dashboard() {
   const user = useAuthStore((state) => state.user);
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const { enqueueSnackbar } = useSnackbar();
   
-  const [taskMenuAnchor, setTaskMenuAnchor] = useState<null | HTMLElement>(null);
-  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
-  const [taskDialogOpen, setTaskDialogOpen] = useState(false);
-  const [editingTask, setEditingTask] = useState<Task | undefined>();
   
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -68,86 +49,14 @@ export default function Dashboard() {
     queryFn: () => statsService.getUserStats(),
   });
   
-  const { data: recentTasks, isLoading: tasksLoading } = useQuery({
-    queryKey: ['tasks', 'recent'],
-    queryFn: () => taskService.searchTasks({ 
-      limit: 5, 
-      status: ['todo', 'in_progress'] 
-    }),
+  const { data: focusTasks, isLoading: tasksLoading } = useQuery({
+    queryKey: ['tasks', 'focus'],
+    queryFn: () => taskService.getSmartRecommendations(10),
   });
   
-  const { data: workspacesData } = useQuery({
-    queryKey: ['workspaces'],
-    queryFn: () => workspaceService.getWorkspaces(),
-  });
-  const workspaces = workspacesData || [];
-  const tasks = recentTasks || [];
+  const recommendations = focusTasks || [];
   
-  // Mutations
-  const updateTaskMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: TaskUpdate }) => 
-      taskService.updateTask(id, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['tasks'] });
-      queryClient.invalidateQueries({ queryKey: ['stats'] });
-    },
-  });
   
-  const deleteTaskMutation = useMutation({
-    mutationFn: (id: string) => taskService.deleteTask(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['tasks'] });
-      queryClient.invalidateQueries({ queryKey: ['stats'] });
-      enqueueSnackbar('Task deleted successfully', { variant: 'success' });
-    },
-  });
-  
-  // Handlers
-  const handleTaskMenuOpen = (event: React.MouseEvent<HTMLElement>, task: Task) => {
-    event.stopPropagation();
-    setTaskMenuAnchor(event.currentTarget);
-    setSelectedTask(task);
-  };
-  
-  const handleTaskMenuClose = () => {
-    setTaskMenuAnchor(null);
-    setSelectedTask(null);
-  };
-  
-  const handleToggleTaskStatus = async (task: Task) => {
-    const newStatus = task.status === 'completed' ? 'todo' : 'completed';
-    try {
-      await updateTaskMutation.mutateAsync({
-        id: task.id,
-        data: { status: newStatus },
-      });
-    } catch (error: any) {
-      enqueueSnackbar(error.response?.data?.detail || 'Failed to update task', {
-        variant: 'error',
-      });
-    }
-  };
-  
-  const handleEditTask = () => {
-    if (selectedTask) {
-      setEditingTask(selectedTask);
-      setTaskDialogOpen(true);
-      handleTaskMenuClose();
-    }
-  };
-  
-  const handleDeleteTask = async () => {
-    if (selectedTask) {
-      try {
-        await deleteTaskMutation.mutateAsync(selectedTask.id);
-        handleTaskMenuClose();
-      } catch (error: any) {
-        enqueueSnackbar(error.response?.data?.detail || 'Failed to delete task', {
-          variant: 'error',
-        });
-      }
-    }
-  };
   
   const formatDueDate = (date: string) => {
     const dueDate = new Date(date);
@@ -251,13 +160,18 @@ export default function Dashboard() {
           </Card>
         </Grid>
         
-        {/* Recent Tasks */}
+        {/* Focus Tasks */}
         <Grid item xs={12} md={8}>
           <Paper sx={{ p: 3 }}>
             <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
-              <Typography variant="h6">
-                Recent Tasks
-              </Typography>
+              <Box>
+                <Typography variant="h6">
+                  Focus Tasks
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  AI-powered recommendations based on urgency and priority
+                </Typography>
+              </Box>
               <Button
                 size="small"
                 endIcon={<ArrowForwardIcon />}
@@ -266,10 +180,10 @@ export default function Dashboard() {
                 View All
               </Button>
             </Box>
-            {tasks.length === 0 ? (
+            {recommendations.length === 0 ? (
               <Box textAlign="center" py={4}>
                 <Typography color="text.secondary">
-                  No tasks yet. Create your first task!
+                  No focus tasks available. Create tasks to see AI recommendations!
                 </Typography>
                 <Button
                   variant="contained"
@@ -281,65 +195,57 @@ export default function Dashboard() {
               </Box>
             ) : (
               <List disablePadding>
-                {tasks.map((task) => (
+                {recommendations.map((recommendation) => (
                   <ListItem
-                    key={task.id}
-                    secondaryAction={
-                      <IconButton 
-                        edge="end" 
-                        aria-label="more"
-                        onClick={(e) => handleTaskMenuOpen(e, task)}
-                      >
-                        <MoreVertIcon />
-                      </IconButton>
-                    }
-                    sx={{ px: 0 }}
+                    key={recommendation.task.id}
+                    sx={{ px: 0, py: 1.5 }}
                   >
-                    <ListItemIcon>
-                      <IconButton
-                        edge="start"
-                        onClick={() => handleToggleTaskStatus(task)}
-                        size="small"
-                      >
-                        {task.status === 'completed' ? (
-                          <CheckCircleIcon color="success" />
-                        ) : (
-                          <RadioButtonUncheckedIcon />
-                        )}
-                      </IconButton>
-                    </ListItemIcon>
                     <ListItemText
                       primary={
                         <Box display="flex" alignItems="center" gap={1}>
-                          {task.title}
-                          {getPriorityIcon(task.priority)}
+                          <Typography variant="body1" fontWeight="medium">
+                            {recommendation.task.title}
+                          </Typography>
+                          {getPriorityIcon(recommendation.task.priority)}
+                          <Chip
+                            label={recommendation.category}
+                            size="small"
+                            color={
+                              recommendation.urgency_score > 0.8 ? 'error' :
+                              recommendation.urgency_score > 0.5 ? 'warning' : 'info'
+                            }
+                            variant="outlined"
+                          />
                         </Box>
                       }
                       secondary={
-                        <Box display="flex" alignItems="center" gap={2} mt={0.5}>
-                          {task.workspace && (
-                            <Chip
-                              label={`${task.workspace.emoji || '📁'} ${task.workspace.name}`}
-                              size="small"
-                              variant="outlined"
-                            />
-                          )}
-                          {task.due_date && (
-                            <Typography variant="caption" color={
-                              isPast(new Date(task.due_date)) && task.status !== 'completed' 
-                                ? 'error.main' 
-                                : 'text.secondary'
-                            }>
-                              Due: {formatDueDate(task.due_date)}
+                        <Box mt={0.5}>
+                          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                            {recommendation.recommendation_reason}
+                          </Typography>
+                          <Box display="flex" alignItems="center" gap={2} flexWrap="wrap">
+                            {recommendation.task.workspace && (
+                              <Chip
+                                label={`${recommendation.task.workspace.emoji || '📁'} ${recommendation.task.workspace.name}`}
+                                size="small"
+                                variant="outlined"
+                              />
+                            )}
+                            {recommendation.task.due_date && (
+                              <Typography variant="caption" color={
+                                isPast(new Date(recommendation.task.due_date)) && recommendation.task.status !== 'completed' 
+                                  ? 'error.main' 
+                                  : 'text.secondary'
+                              }>
+                                Due: {formatDueDate(recommendation.task.due_date)}
+                              </Typography>
+                            )}
+                            <Typography variant="caption" color="text.secondary">
+                              Urgency: {Math.round(recommendation.urgency_score * 100)}%
                             </Typography>
-                          )}
+                          </Box>
                         </Box>
                       }
-                      primaryTypographyProps={{
-                        style: {
-                          textDecoration: task.status === 'completed' ? 'line-through' : 'none',
-                        },
-                      }}
                     />
                   </ListItem>
                 ))}
@@ -396,40 +302,6 @@ export default function Dashboard() {
           </Paper>
         </Grid>
       </Grid>
-      
-      {/* Task Menu */}
-      <Menu
-        anchorEl={taskMenuAnchor}
-        open={Boolean(taskMenuAnchor)}
-        onClose={handleTaskMenuClose}
-      >
-        <MenuItem onClick={handleEditTask}>
-          <EditIcon fontSize="small" sx={{ mr: 1 }} />
-          Edit
-        </MenuItem>
-        <MenuItem onClick={handleDeleteTask} sx={{ color: 'error.main' }}>
-          <DeleteIcon fontSize="small" sx={{ mr: 1 }} />
-          Delete
-        </MenuItem>
-      </Menu>
-      
-      {/* Task Dialog */}
-      <TaskDialog
-        open={taskDialogOpen}
-        onClose={() => {
-          setTaskDialogOpen(false);
-          setEditingTask(undefined);
-        }}
-        onSave={async (data) => {
-          if (editingTask) {
-            await updateTaskMutation.mutateAsync({ id: editingTask.id, data });
-          }
-          setTaskDialogOpen(false);
-          setEditingTask(undefined);
-        }}
-        task={editingTask}
-        workspaces={workspaces}
-      />
     </Container>
   );
 }

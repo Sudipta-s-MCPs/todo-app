@@ -23,19 +23,7 @@ from .smart_task_parser import SmartTaskParser
 mcp = FastMCP("Smart-ToDo MCP Server")
 
 # Configuration from environment
-API_KEY = os.environ.get("TODO_API_KEY", "")
-USER_ID = os.environ.get("TODO_USER_ID", "")
-DEVICE_ID = os.environ.get("TODO_DEVICE_ID", "")
 API_ENDPOINT = os.environ.get("TODO_API_ENDPOINT", "http://localhost:8000/api/v1")
-DEVICE_NAME = os.environ.get("TODO_DEVICE_NAME", "MCP Agent")
-
-# HTTP client with authentication
-headers = {
-    "X-API-Key": API_KEY,
-    "X-Device-ID": DEVICE_ID,
-    "X-Device-Name": DEVICE_NAME,
-    "X-Device-Type": "mcp_agent"
-}
 
 
 class TaskCreateRequest(BaseModel):
@@ -58,37 +46,50 @@ class TaskUpdateRequest(BaseModel):
     due_date: Optional[str] = Field(None, description="New due date in ISO format")
 
 
-async def get_http_client() -> httpx.AsyncClient:
-    """Get configured HTTP client"""
+def get_http_client() -> httpx.AsyncClient:
+    """Get configured HTTP client with proper authentication"""
+    # Get credentials from environment (passed by client wrapper)
+    headers = {}
+    
+    api_key = os.environ.get("TODO_API_KEY", "")
+    if api_key:
+        headers = {
+            "X-API-Key": api_key,
+            "X-Device-ID": os.environ.get("TODO_DEVICE_ID", ""),
+            "X-Device-Name": os.environ.get("TODO_DEVICE_NAME", "MCP Agent"),
+            "X-User-ID": os.environ.get("TODO_USER_ID", ""),
+            "X-Device-Type": "mcp_agent"
+        }
+    
     return httpx.AsyncClient(
         base_url=API_ENDPOINT,
         headers=headers,
-        timeout=30.0
+        timeout=30.0,
+        follow_redirects=True  # Handle trailing slash redirects
     )
 
 
-async def get_user_lists() -> List[Dict[str, Any]]:
+async def get_user_lists(client: httpx.AsyncClient) -> List[Dict[str, Any]]:
     """Get all lists accessible to the user"""
-    async with get_http_client() as client:
-        # First get workspaces
-        workspaces_response = await client.get("/workspaces")
-        workspaces_response.raise_for_status()
-        workspaces = workspaces_response.json()
+    # First get workspaces
+    workspaces_response = await client.get("/workspaces")
+    workspaces_response.raise_for_status()
+    workspaces = workspaces_response.json()
+    
+    # Get lists for each workspace
+    all_lists = []
+    for workspace in workspaces:
+        lists_response = await client.get(f"/workspaces/{workspace['id']}/lists")
+        lists_response.raise_for_status()
+        lists = lists_response.json()
         
-        # Get lists for each workspace
-        all_lists = []
-        for workspace in workspaces:
-            lists_response = await client.get(f"/workspaces/{workspace['id']}/lists")
-            lists_response.raise_for_status()
-            lists = lists_response.json()
-            
-            # Add workspace info to each list
-            for lst in lists:
-                lst['workspace_name'] = workspace['name']
-                lst['workspace_id'] = workspace['id']
-                all_lists.append(lst)
-        
-        return all_lists
+        # Add workspace info to each list
+        for lst in lists:
+            lst['workspace_name'] = workspace['name']
+            lst['workspace_id'] = workspace['id']
+            all_lists.append(lst)
+    
+    return all_lists
 
 
 @mcp.tool
@@ -106,7 +107,7 @@ async def create_task(
     
     async with get_http_client() as client:
         # Find the target list
-        lists = await get_user_lists()
+        lists = await get_user_lists(client)
         
         # Default to first list or find by name
         target_list = lists[0] if lists else None
@@ -203,7 +204,7 @@ async def list_tasks(
         
         # Get workspaces/lists if filtering
         if workspace_name or list_name:
-            lists = await get_user_lists()
+            lists = await get_user_lists(client)
             
             # Filter by workspace
             if workspace_name:
@@ -424,27 +425,28 @@ async def get_lists(ctx: Context) -> Dict[str, Any]:
     """Get all lists organized by workspace"""
     await ctx.info("Fetching lists...")
     
-    lists = await get_user_lists()
-    
-    # Organize by workspace
-    by_workspace = {}
-    for lst in lists:
-        ws_name = lst['workspace_name']
-        if ws_name not in by_workspace:
-            by_workspace[ws_name] = []
-        by_workspace[ws_name].append({
-            "id": lst['id'],
-            "name": lst['name'],
-            "color": lst['color'],
-            "task_count": lst.get('task_count', 0)
-        })
-    
-    await ctx.info(f"Found {len(lists)} list(s) across {len(by_workspace)} workspace(s)")
-    
-    return {
-        "count": len(lists),
-        "by_workspace": by_workspace
-    }
+    async with get_http_client() as client:
+        lists = await get_user_lists(client)
+        
+        # Organize by workspace
+        by_workspace = {}
+        for lst in lists:
+            ws_name = lst['workspace_name']
+            if ws_name not in by_workspace:
+                by_workspace[ws_name] = []
+            by_workspace[ws_name].append({
+                "id": lst['id'],
+                "name": lst['name'],
+                "color": lst['color'],
+                "task_count": lst.get('task_count', 0)
+            })
+        
+        await ctx.info(f"Found {len(lists)} list(s) across {len(by_workspace)} workspace(s)")
+        
+        return {
+            "count": len(lists),
+            "by_workspace": by_workspace
+        }
 
 
 @mcp.tool
@@ -456,21 +458,21 @@ async def move_task(
     """Move a task to a different list"""
     await ctx.info(f"Moving task {task_id} to list '{list_name}'")
     
-    # Find target list
-    lists = await get_user_lists()
-    target_list = None
-    
-    for lst in lists:
-        if lst['name'].lower() == list_name.lower():
-            target_list = lst
-            break
-    
-    if not target_list:
-        await ctx.error(f"List '{list_name}' not found")
-        return {"error": f"List '{list_name}' not found"}
-    
-    # Update task with new list
     async with get_http_client() as client:
+        # Find target list
+        lists = await get_user_lists(client)
+        target_list = None
+        
+        for lst in lists:
+            if lst['name'].lower() == list_name.lower():
+                target_list = lst
+                break
+        
+        if not target_list:
+            await ctx.error(f"List '{list_name}' not found")
+            return {"error": f"List '{list_name}' not found"}
+        
+        # Update task with new list
         response = await client.put(
             f"/tasks/{task_id}",
             json={"list_id": target_list['id']}
@@ -564,7 +566,7 @@ async def smart_todo_manager(
         workspaces_response.raise_for_status()
         workspaces = workspaces_response.json()
         
-        lists = await get_user_lists()
+        lists = await get_user_lists(client)
         
         # Get user's recent tasks for context
         tasks_response = await client.post("/tasks/search", json={"limit": 20})
@@ -593,7 +595,7 @@ async def smart_todo_manager(
             user_context=user_context,
             conversation_history=conv_history,
             mode="mcp",
-            user_id=USER_ID
+            user_id=os.environ.get("TODO_USER_ID", "unknown")
         )
         
         await ctx.info(f"AI intent: {ai_response.intent}, confidence: {ai_response.confidence}")
@@ -823,5 +825,16 @@ Use the search and list tools to analyze my tasks."""
 
 
 if __name__ == "__main__":
-    # Run the MCP server with HTTP transport (recommended)
-    mcp.run(transport="http", host="0.0.0.0", port=5485)
+    # Run the MCP server with HTTP transport
+    # FastMCP v2.9.2 - use basic HTTP transport for Claude Desktop compatibility
+    try:
+        # Try with session_required=False if supported
+        mcp.run(
+            transport="http", 
+            host="0.0.0.0", 
+            port=5485,
+            session_required=False
+        )
+    except TypeError:
+        # Fallback to basic HTTP transport if session_required is not supported
+        mcp.run(transport="http", host="0.0.0.0", port=5485)

@@ -85,13 +85,15 @@ services:
     ports:
       - "${MCP_PORT:-5485}:5485"
     environment:
-      - TODO_API_KEY=sk_todo_dXUp4PpVrpoSHUaN28CQMKJXGuNJZs7vCiTcmxAX
-      - TODO_DEVICE_ID=mcp_K0YxB7lyqgjOZLTv
-      - TODO_DEVICE_NAME=Smart-ToDo MCP Server
       - TODO_API_ENDPOINT=http://backend:8000/api/v1
       - MCP_SERVER_NAME=${MCP_SERVER_NAME:-TodoApp}
       - MCP_SERVER_VERSION=${MCP_SERVER_VERSION:-1.0.0}
       - PYTHONPATH=/app
+      # MCP Authentication - These will be passed from Claude Desktop
+      - TODO_API_KEY=${TODO_API_KEY:-}
+      - TODO_USER_ID=${TODO_USER_ID:-}
+      - TODO_DEVICE_ID=${TODO_DEVICE_ID:-}
+      - TODO_DEVICE_NAME=${TODO_DEVICE_NAME:-Claude Desktop}
     command: ["sh", "-c", "cd /app && python -m mcp_server.server"]
     volumes:
       - ./backend:/app

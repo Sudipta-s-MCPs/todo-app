@@ -13,7 +13,8 @@ import logging
 
 from app.database import get_db
 from app.models.user import User, UserDevice, APIKey, MCPAgent, UserSession, AccessMethod
-from app.utils.security import decode_token, verify_api_key
+from app.models.oauth import OAuthToken
+from app.utils.security import decode_token, verify_api_key, verify_password
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,33 @@ async def get_current_user_optional(
         try:
             payload = decode_token(token)
             if payload.get("type") != "access":
+                # Check if it's an OAuth token
+                # Try finding OAuth token by comparing with stored hashes
+                result = await db.execute(
+                    select(OAuthToken).where(
+                        OAuthToken.revoked_at.is_(None)
+                    )
+                )
+                oauth_tokens = result.scalars().all()
+                
+                oauth_token = None
+                for t in oauth_tokens:
+                    if verify_password(token, t.access_token_hash):
+                        oauth_token = t
+                        break
+                
+                if oauth_token and not oauth_token.is_access_token_expired:
+                    # Update last used timestamp
+                    oauth_token.update_last_used()
+                    await db.commit()
+                    
+                    # Get user from OAuth token
+                    result = await db.execute(
+                        select(User).where(User.id == oauth_token.user_id)
+                    )
+                    user = result.scalar_one_or_none()
+                    return user
+                
                 return None
                 
             user_id = payload.get("sub")
@@ -46,9 +74,32 @@ async def get_current_user_optional(
                 )
                 user = result.scalar_one_or_none()
         except (JWTError, ValueError):
-            pass
+            # Try OAuth token if JWT decode fails
+            result = await db.execute(
+                select(OAuthToken).where(
+                    OAuthToken.revoked_at.is_(None)
+                )
+            )
+            oauth_tokens = result.scalars().all()
+            
+            oauth_token = None
+            for t in oauth_tokens:
+                if verify_password(token, t.access_token_hash):
+                    oauth_token = t
+                    break
+            
+            if oauth_token and not oauth_token.is_access_token_expired:
+                # Update last used timestamp
+                oauth_token.update_last_used()
+                await db.commit()
+                
+                # Get user from OAuth token
+                result = await db.execute(
+                    select(User).where(User.id == oauth_token.user_id)
+                )
+                user = result.scalar_one_or_none()
     
-    # Try API key if no JWT
+    # Try API key if no JWT/OAuth
     if not user and api_key:
         api_key_obj = await verify_api_key(db, api_key)
         if api_key_obj:
@@ -189,7 +240,24 @@ async def get_access_info_direct(
                 mcp_agent_id = payload.get("agent_id")
                 
         except (JWTError, ValueError):
-            pass
+            # Try OAuth token if JWT decode fails
+            result = await db.execute(
+                select(OAuthToken).where(
+                    OAuthToken.revoked_at.is_(None)
+                )
+            )
+            oauth_tokens = result.scalars().all()
+            
+            oauth_token = None
+            for t in oauth_tokens:
+                if verify_password(token, t.access_token_hash):
+                    oauth_token = t
+                    break
+            
+            if oauth_token and not oauth_token.is_access_token_expired:
+                access_method = AccessMethod.OAUTH
+                device_id = oauth_token.device_id
+                mcp_agent_id = str(oauth_token.mcp_agent_id) if oauth_token.mcp_agent_id else None
     
     return access_method, device_id, session_id, api_key_id, mcp_agent_id
 
@@ -256,7 +324,24 @@ async def get_access_info(
                 mcp_agent_id = payload.get("agent_id")
                 
         except (JWTError, ValueError):
-            pass
+            # Try OAuth token if JWT decode fails
+            result = await db.execute(
+                select(OAuthToken).where(
+                    OAuthToken.revoked_at.is_(None)
+                )
+            )
+            oauth_tokens = result.scalars().all()
+            
+            oauth_token = None
+            for t in oauth_tokens:
+                if verify_password(token, t.access_token_hash):
+                    oauth_token = t
+                    break
+            
+            if oauth_token and not oauth_token.is_access_token_expired:
+                access_method = AccessMethod.OAUTH
+                device_id = oauth_token.device_id
+                mcp_agent_id = str(oauth_token.mcp_agent_id) if oauth_token.mcp_agent_id else None
     
     return access_method, device_id, session_id, api_key_id, mcp_agent_id
 

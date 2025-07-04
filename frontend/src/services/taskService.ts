@@ -1,5 +1,5 @@
 import { api } from './api';
-import type { Task, TaskCreate, TaskUpdate, TaskAttachment } from '../types';
+import type { Task, TaskCreate, TaskUpdate, TaskAttachment, SmartTaskRecommendation } from '../types';
 
 export const taskService = {
   async getListTasks(
@@ -120,5 +120,10 @@ export const taskService = {
 
   async deleteAttachment(attachmentId: string): Promise<void> {
     await api.delete(`/attachments/${attachmentId}`);
+  },
+
+  async getSmartRecommendations(limit: number = 10): Promise<SmartTaskRecommendation[]> {
+    const response = await api.get<SmartTaskRecommendation[]>(`/tasks/smart-recommendations?limit=${limit}`);
+    return response.data;
   },
 };

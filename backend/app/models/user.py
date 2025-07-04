@@ -147,12 +147,17 @@ class MCPAgent(Base):
     capabilities = Column(JSON, default=list)
     permissions = Column(JSON, default=list)
     
+    # Authentication tracking
+    auth_method = Column(String(50), default="api_key")  # api_key, oauth
+    api_key_id = Column(UUID(as_uuid=True), ForeignKey("api_keys.id"), nullable=True)
+    
     last_heartbeat = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     is_active = Column(Boolean, default=True)
     
     # Relationships
     user = relationship("User", back_populates="mcp_agents")
+    api_key = relationship("APIKey", foreign_keys=[api_key_id])
     activities = relationship("ActivityLog", back_populates="mcp_agent", cascade="all, delete-orphan")
 
 

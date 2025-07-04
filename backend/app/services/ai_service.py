@@ -10,6 +10,7 @@ from typing import List, Dict, Tuple, Optional, Any
 from datetime import datetime, timedelta
 import asyncio
 from functools import lru_cache
+from uuid import UUID
 
 import redis.asyncio as redis
 from pydantic import BaseModel, Field
@@ -699,6 +700,272 @@ Analyze the user's request and respond with:
             confidence=0.0,
             provider_used="failed"
         )
+    
+    async def get_smart_task_recommendations(
+        self,
+        user_id: str,
+        all_tasks: List[Dict[str, Any]],
+        limit: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        Get smart task recommendations using Qdrant and AI
+        
+        Returns list of tasks with recommendation metadata
+        """
+        from app.services.vector_service import get_vector_service
+        from datetime import datetime, timedelta
+        
+        # Check usage limits
+        if not await self.usage_tracker.check_and_update_usage(user_id, 1000):
+            logger.warning(f"Usage limit exceeded for user {user_id}")
+            # Return simple rule-based recommendations
+            return self._get_rule_based_recommendations(all_tasks, limit)
+        
+        recommendations = []
+        current_time = datetime.utcnow()
+        
+        # Phase 1: Use Qdrant to find contextually relevant tasks
+        vector_service = get_vector_service()
+        qdrant_tasks = []
+        
+        if vector_service and vector_service.client:
+            urgency_queries = [
+                "urgent overdue tasks that need immediate attention",
+                "tasks due today or tomorrow", 
+                "high priority important tasks",
+                "tasks with upcoming reminders in the next 24 hours"
+            ]
+            
+            task_ids_from_qdrant = set()
+            for query in urgency_queries:
+                try:
+                    similar_tasks = await vector_service.search_similar_tasks(
+                        query_text=query,
+                        user_id=UUID(user_id) if user_id else None,
+                        limit=20,
+                        score_threshold=0.5
+                    )
+                    for task_data, score in similar_tasks:
+                        task_id = task_data.get('id')
+                        if task_id and task_id not in task_ids_from_qdrant:
+                            task_ids_from_qdrant.add(task_id)
+                            qdrant_tasks.append((task_data, score))
+                except Exception as e:
+                    logger.error(f"Qdrant search failed: {str(e)}")
+        
+        # Phase 2: Traditional filtering for comprehensive coverage
+        urgent_tasks = []
+        for task in all_tasks:
+            if task.get('status') in ['completed', 'archived']:
+                continue
+                
+            urgency_score = 0.0
+            category = "normal"
+            
+            # Check if task is overdue
+            if task.get('due_date'):
+                due_date = datetime.fromisoformat(task['due_date'].replace('Z', '+00:00'))
+                if due_date < current_time:
+                    urgency_score = 1.0
+                    category = "overdue"
+                elif due_date.date() == current_time.date():
+                    urgency_score = 0.9
+                    category = "due_today"
+                elif due_date < current_time + timedelta(days=2):
+                    urgency_score = 0.8
+                    category = "due_tomorrow"
+                elif due_date < current_time + timedelta(days=7):
+                    urgency_score = 0.6
+                    category = "due_this_week"
+            
+            # Check priority
+            if task.get('priority') == 'high' and urgency_score < 0.7:
+                urgency_score = max(urgency_score, 0.7)
+                if category == "normal":
+                    category = "high_priority"
+            
+            # Check for reminders
+            if task.get('reminder_date'):
+                reminder_date = datetime.fromisoformat(task['reminder_date'].replace('Z', '+00:00'))
+                if reminder_date < current_time + timedelta(hours=24):
+                    urgency_score = max(urgency_score, 0.8)
+                    if category == "normal":
+                        category = "reminder_soon"
+            
+            # Check for stale tasks
+            if task.get('created_at'):
+                created_date = datetime.fromisoformat(task['created_at'].replace('Z', '+00:00'))
+                days_old = (current_time - created_date).days
+                if days_old > 30 and urgency_score < 0.5:
+                    urgency_score = max(urgency_score, 0.5)
+                    if category == "normal":
+                        category = "stale"
+            
+            if urgency_score > 0.3:
+                task['urgency_score'] = urgency_score
+                task['category'] = category
+                urgent_tasks.append(task)
+        
+        # Phase 3: Combine and deduplicate
+        combined_tasks = []
+        seen_ids = set()
+        
+        # Add Qdrant results first (they have semantic relevance)
+        for task_data, vector_score in qdrant_tasks:
+            task_id = task_data.get('id')
+            if task_id not in seen_ids:
+                seen_ids.add(task_id)
+                # Find full task data
+                full_task = next((t for t in all_tasks if t.get('id') == task_id), None)
+                if full_task:
+                    full_task['vector_relevance_score'] = vector_score
+                    combined_tasks.append(full_task)
+        
+        # Add urgent tasks from traditional filtering
+        for task in urgent_tasks:
+            if task.get('id') not in seen_ids:
+                seen_ids.add(task['id'])
+                combined_tasks.append(task)
+        
+        # Phase 4: Use AI for final ranking (if we have tasks to rank)
+        if combined_tasks:
+            # Limit tasks sent to AI to reduce token usage
+            tasks_for_ai = combined_tasks[:30]
+            
+            prompt = f"""Analyze these tasks and recommend the top {limit} that need immediate attention.
+Consider: overdue status, due dates, priority levels, reminders, task age, and semantic relevance.
+
+Tasks:
+{json.dumps([{
+    'id': t.get('id'),
+    'title': t.get('title'),
+    'priority': t.get('priority'),
+    'due_date': t.get('due_date'),
+    'reminder_date': t.get('reminder_date'),
+    'created_at': t.get('created_at'),
+    'urgency_score': t.get('urgency_score', 0),
+    'category': t.get('category', 'normal'),
+    'vector_score': t.get('vector_relevance_score', 0)
+} for t in tasks_for_ai], indent=2)}
+
+Return a JSON array of the top {limit} task IDs with reasoning:
+[{{"id": "task_id", "reason": "brief explanation", "final_score": 0.0-1.0}}]"""
+
+            try:
+                # Try to get AI recommendations
+                for provider in self._providers:
+                    result = await self._call_provider(
+                        provider, 
+                        prompt,
+                        "You are a task prioritization expert. Analyze tasks and recommend the most urgent ones."
+                    )
+                    if result:
+                        try:
+                            ai_recommendations = json.loads(result)
+                            
+                            # Build final recommendations
+                            for rec in ai_recommendations[:limit]:
+                                task_id = rec.get('id')
+                                task = next((t for t in combined_tasks if t.get('id') == task_id), None)
+                                if task:
+                                    recommendations.append({
+                                        'task': task,
+                                        'recommendation_reason': rec.get('reason', 'High priority task'),
+                                        'urgency_score': rec.get('final_score', task.get('urgency_score', 0.5)),
+                                        'category': task.get('category', 'normal'),
+                                        'vector_relevance_score': task.get('vector_relevance_score')
+                                    })
+                            
+                            if recommendations:
+                                return recommendations
+                        except json.JSONDecodeError:
+                            logger.error(f"Failed to parse AI response from {provider.get_name()}")
+                            continue
+            except Exception as e:
+                logger.error(f"AI ranking failed: {str(e)}")
+        
+        # Fallback: Return top tasks by urgency score
+        combined_tasks.sort(key=lambda x: x.get('urgency_score', 0), reverse=True)
+        for task in combined_tasks[:limit]:
+            recommendations.append({
+                'task': task,
+                'recommendation_reason': self._get_recommendation_reason(task),
+                'urgency_score': task.get('urgency_score', 0.5),
+                'category': task.get('category', 'normal'),
+                'vector_relevance_score': task.get('vector_relevance_score')
+            })
+        
+        return recommendations
+    
+    def _get_rule_based_recommendations(self, all_tasks: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
+        """Simple rule-based recommendations when AI is unavailable"""
+        from datetime import datetime, timedelta
+        
+        current_time = datetime.utcnow()
+        recommendations = []
+        
+        # Score and categorize tasks
+        for task in all_tasks:
+            if task.get('status') in ['completed', 'archived']:
+                continue
+            
+            urgency_score = 0.0
+            category = "normal"
+            reason = ""
+            
+            # Check overdue
+            if task.get('due_date'):
+                due_date = datetime.fromisoformat(task['due_date'].replace('Z', '+00:00'))
+                if due_date < current_time:
+                    urgency_score = 1.0
+                    category = "overdue"
+                    days_overdue = (current_time - due_date).days
+                    reason = f"Overdue by {days_overdue} day(s)"
+                elif due_date.date() == current_time.date():
+                    urgency_score = 0.9
+                    category = "due_today"
+                    reason = "Due today"
+                elif due_date < current_time + timedelta(days=1):
+                    urgency_score = 0.8
+                    category = "due_tomorrow"
+                    reason = "Due tomorrow"
+            
+            # Check priority
+            if task.get('priority') == 'high':
+                urgency_score = max(urgency_score, 0.7)
+                if not reason:
+                    reason = "High priority task"
+                    category = "high_priority"
+            
+            if urgency_score > 0:
+                recommendations.append({
+                    'task': task,
+                    'recommendation_reason': reason,
+                    'urgency_score': urgency_score,
+                    'category': category,
+                    'vector_relevance_score': None
+                })
+        
+        # Sort by urgency and return top N
+        recommendations.sort(key=lambda x: x['urgency_score'], reverse=True)
+        return recommendations[:limit]
+    
+    def _get_recommendation_reason(self, task: Dict[str, Any]) -> str:
+        """Generate a reason for why this task is recommended"""
+        category = task.get('category', 'normal')
+        
+        reasons = {
+            'overdue': 'This task is overdue and needs immediate attention',
+            'due_today': 'This task is due today',
+            'due_tomorrow': 'This task is due tomorrow',
+            'due_this_week': 'This task is due this week',
+            'high_priority': 'This is a high priority task',
+            'reminder_soon': 'You have a reminder set for this task',
+            'stale': 'This task has been pending for a while',
+            'related_cluster': 'This task is part of an important project'
+        }
+        
+        return reasons.get(category, 'This task needs your attention')
 
 
 # Singleton instance

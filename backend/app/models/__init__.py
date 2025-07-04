@@ -21,6 +21,9 @@ from app.models.settings import (
 from app.models.chat import (
     ChatMessage
 )
+from app.models.oauth import (
+    OAuthClient, OAuthAuthorizationCode, OAuthToken
+)
 
 __all__ = [
     # User models
@@ -43,4 +46,7 @@ __all__ = [
     
     # Chat models
     "ChatMessage",
+    
+    # OAuth models
+    "OAuthClient", "OAuthAuthorizationCode", "OAuthToken",
 ]

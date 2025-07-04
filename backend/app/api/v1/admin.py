@@ -15,6 +15,7 @@ from app.models.user import User, UserDevice, APIKey, MCPAgent, AccessMethod
 from app.models.workspace import Workspace, WorkspaceMember
 from app.models.task import Task
 from app.models.activity import ActivityLog, ActionType
+from app.models.oauth import OAuthClient, OAuthToken
 from app.api.deps import get_current_user, get_current_admin_user, is_admin_user
 from app.schemas.auth import UserInfo
 from app.schemas.admin import UserAdminCreate, UserAdminUpdate
@@ -22,6 +23,7 @@ from app.utils.security import get_password_hash
 from app.services.email_service import email_service
 import hashlib
 import os
+import secrets
 
 router = APIRouter()
 
@@ -536,7 +538,8 @@ async def get_all_mcp_agents(
     
     # Base query
     query = select(MCPAgent).options(
-        joinedload(MCPAgent.user)
+        joinedload(MCPAgent.user),
+        joinedload(MCPAgent.api_key)
     )
     
     # Apply filters
@@ -559,8 +562,10 @@ async def get_all_mcp_agents(
     for agent in agents:
         agent_dict = {
             "id": str(agent.id),
+            "agent_name": agent.agent_name,
             "agent_identifier": agent.agent_identifier,
             "capabilities": agent.capabilities,
+            "auth_method": agent.auth_method,
             "is_active": agent.is_active,
             "last_heartbeat": agent.last_heartbeat.isoformat() if agent.last_heartbeat else None,
             "created_at": agent.created_at.isoformat() if agent.created_at else None,
@@ -568,7 +573,12 @@ async def get_all_mcp_agents(
                 "id": str(agent.user.id),
                 "email": agent.user.email,
                 "full_name": agent.user.name
-            }
+            },
+            "api_key": {
+                "id": str(agent.api_key.id),
+                "name": agent.api_key.name,
+                "is_active": agent.api_key.is_active
+            } if agent.api_key else None
         }
         agent_data.append(agent_dict)
     
@@ -681,6 +691,7 @@ async def register_mcp_agent_admin(
         agent_name=agent_name,
         agent_identifier=agent_identifier,
         capabilities=capabilities,
+        auth_method="api_key",  # This registration creates an API key
         is_active=True
     )
     db.add(mcp_agent)
@@ -689,6 +700,10 @@ async def register_mcp_agent_admin(
     await db.commit()
     await db.refresh(mcp_agent)
     await db.refresh(api_key)
+    
+    # Link the API key to the MCP agent
+    mcp_agent.api_key_id = api_key.id
+    await db.commit()
     
     # Log activity after commit so we have the IDs
     activity = ActivityLog(
@@ -723,28 +738,26 @@ async def register_mcp_agent_admin(
             }
         },
         "claude_desktop": {
-            "format": "json",
+            "format": "remote_integration",
             "content": {
-                "mcpServers": {
-                    "smart-todo": {
-                        "command": "npx",
-                        "args": [
-                            "mcp-remote",
-                            mcp_endpoint
-                        ],
-                        "env": {
-                            "TODO_API_KEY": api_key_value,
-                            "TODO_USER_ID": str(user.id),
-                            "TODO_DEVICE_ID": agent_identifier,
-                            "TODO_DEVICE_NAME": agent_name
-                        }
+                "method": "Native Remote MCP Support",
+                "endpoint": mcp_endpoint,
+                "authentication": {
+                    "type": "headers",
+                    "headers": {
+                        "X-API-Key": api_key_value,
+                        "X-Device-ID": agent_identifier,
+                        "X-Device-Name": agent_name,
+                        "X-User-ID": str(user.id)
                     }
                 },
                 "instructions": [
-                    "1. Install Node.js if not already installed",
-                    "2. Install mcp-remote: npm install -g mcp-remote (or use npx)",
-                    "3. Add this configuration to ~/Library/Application Support/Claude/claude_desktop_config.json (macOS) or %APPDATA%\\Claude\\claude_desktop_config.json (Windows)",
-                    "4. Restart Claude Desktop"
+                    "Claude Desktop now supports remote MCP servers natively!",
+                    "1. Open Claude Desktop",
+                    "2. Go to Settings > Integrations",
+                    "3. Add a new remote MCP server with the endpoint URL",
+                    "4. Configure authentication headers as provided above",
+                    "Note: This feature is available for Pro, Max, Teams, and Enterprise users"
                 ]
             }
         },
@@ -886,7 +899,8 @@ async def get_all_api_keys(
     
     # Base query
     query = select(APIKey).options(
-        joinedload(APIKey.user)
+        joinedload(APIKey.user),
+        selectinload(APIKey.activities)
     )
     
     # Apply filters
@@ -907,6 +921,11 @@ async def get_all_api_keys(
     # Format response
     key_data = []
     for key in keys:
+        # Check if this API key is linked to an MCP agent
+        mcp_agent = await db.scalar(
+            select(MCPAgent).where(MCPAgent.api_key_id == key.id)
+        )
+        
         key_dict = {
             "id": str(key.id),
             "name": key.name,
@@ -920,7 +939,12 @@ async def get_all_api_keys(
                 "id": str(key.user.id),
                 "email": key.user.email,
                 "full_name": key.user.name
-            }
+            },
+            "mcp_agent": {
+                "id": str(mcp_agent.id),
+                "name": mcp_agent.agent_name,
+                "identifier": mcp_agent.agent_identifier
+            } if mcp_agent else None
         }
         key_data.append(key_dict)
     
@@ -1016,3 +1040,379 @@ async def get_admin_overview(
             "last_24_hours": recent_activities or 0
         }
     }
+
+
+# OAuth Client Management Endpoints
+@router.get("/oauth/clients", response_model=Dict[str, Any])
+async def get_all_oauth_clients(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    search: Optional[str] = None,
+    is_active: Optional[bool] = None,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get all OAuth clients with pagination and filtering"""
+    
+    # Base query
+    query = select(OAuthClient).options(
+        joinedload(OAuthClient.owner),
+        selectinload(OAuthClient.tokens)
+    )
+    
+    # Apply filters
+    if search:
+        query = query.where(
+            or_(
+                OAuthClient.client_name.ilike(f"%{search}%"),
+                OAuthClient.client_id.ilike(f"%{search}%")
+            )
+        )
+    
+    if is_active is not None:
+        query = query.where(OAuthClient.is_active == is_active)
+    
+    # Get total count
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = await db.scalar(count_query)
+    
+    # Apply pagination
+    query = query.offset(skip).limit(limit).order_by(OAuthClient.created_at.desc())
+    
+    # Execute query
+    result = await db.execute(query)
+    clients = result.scalars().all()
+    
+    # Format response
+    client_data = []
+    for client in clients:
+        # Count active tokens
+        active_tokens = len([t for t in client.tokens if not t.is_revoked])
+        
+        client_dict = {
+            "id": str(client.id),
+            "client_id": client.client_id,
+            "client_name": client.client_name,
+            "client_type": client.client_type,
+            "redirect_uris": client.redirect_uris,
+            "allowed_scopes": client.allowed_scopes,
+            "is_active": client.is_active,
+            "created_at": client.created_at.isoformat() if client.created_at else None,
+            "active_tokens": active_tokens,
+            "owner": {
+                "id": str(client.owner.id) if client.owner else None,
+                "email": client.owner.email if client.owner else None,
+                "full_name": client.owner.name if client.owner else None
+            } if client.owner else None
+        }
+        client_data.append(client_dict)
+    
+    return {
+        "clients": client_data,
+        "total": total_count or 0,
+        "skip": skip,
+        "limit": limit
+    }
+
+
+@router.post("/oauth/clients", response_model=Dict[str, Any])
+async def create_oauth_client(
+    request: Dict[str, Any],
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Create a new OAuth client
+    
+    Request body:
+    {
+        "client_name": "Claude Desktop Integration",
+        "client_type": "public",  # or "confidential"
+        "redirect_uris": ["http://localhost:*", "claude://oauth/callback"],
+        "allowed_scopes": ["read", "write"],
+        "owner_user_id": "uuid" (optional)
+    }
+    """
+    # Generate client credentials
+    client_id = secrets.token_urlsafe(32)
+    client_secret = None
+    client_secret_hash = None
+    
+    if request.get("client_type", "public") == "confidential":
+        client_secret = secrets.token_urlsafe(48)
+        client_secret_hash = get_password_hash(client_secret)
+    
+    # Create OAuth client
+    oauth_client = OAuthClient(
+        client_id=client_id,
+        client_secret_hash=client_secret_hash,
+        client_name=request.get("client_name", "OAuth Client"),
+        client_type=request.get("client_type", "public"),
+        redirect_uris=request.get("redirect_uris", []),
+        allowed_scopes=request.get("allowed_scopes", ["read", "write"]),
+        owner_user_id=request.get("owner_user_id"),
+        registration_access_token=secrets.token_urlsafe(32),
+        is_active=True
+    )
+    
+    db.add(oauth_client)
+    await db.commit()
+    await db.refresh(oauth_client)
+    
+    # Log activity
+    activity = ActivityLog(
+        user_id=admin.id,
+        action_type=ActionType.CREATE.value,
+        resource_type="oauth_client",
+        resource_id=str(oauth_client.id),
+        access_method=AccessMethod.WEB.value,
+        details={
+            "client_name": oauth_client.client_name,
+            "client_type": oauth_client.client_type
+        }
+    )
+    db.add(activity)
+    await db.commit()
+    
+    response = {
+        "id": str(oauth_client.id),
+        "client_id": oauth_client.client_id,
+        "client_name": oauth_client.client_name,
+        "client_type": oauth_client.client_type,
+        "redirect_uris": oauth_client.redirect_uris,
+        "allowed_scopes": oauth_client.allowed_scopes,
+        "registration_access_token": oauth_client.registration_access_token,
+        "created_at": oauth_client.created_at.isoformat()
+    }
+    
+    if client_secret:
+        response["client_secret"] = client_secret
+        response["note"] = "Save the client_secret securely. It will not be shown again."
+    
+    return response
+
+
+@router.patch("/oauth/clients/{client_id}", response_model=Dict[str, Any])
+async def update_oauth_client(
+    client_id: str,
+    update_data: Dict[str, Any],
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Update an OAuth client"""
+    
+    # Get the client
+    oauth_client = await db.get(OAuthClient, client_id)
+    if not oauth_client:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="OAuth client not found"
+        )
+    
+    # Update allowed fields
+    allowed_fields = ["client_name", "redirect_uris", "allowed_scopes", "is_active"]
+    for field in allowed_fields:
+        if field in update_data:
+            setattr(oauth_client, field, update_data[field])
+    
+    # Update timestamp
+    oauth_client.updated_at = datetime.utcnow()
+    
+    await db.commit()
+    await db.refresh(oauth_client)
+    
+    # Log activity
+    activity = ActivityLog(
+        user_id=admin.id,
+        action_type=ActionType.UPDATE.value,
+        resource_type="oauth_client",
+        resource_id=str(oauth_client.id),
+        access_method=AccessMethod.WEB.value,
+        details={
+            "updated_fields": list(update_data.keys()),
+            "client_name": oauth_client.client_name
+        }
+    )
+    db.add(activity)
+    await db.commit()
+    
+    return {
+        "id": str(oauth_client.id),
+        "client_id": oauth_client.client_id,
+        "client_name": oauth_client.client_name,
+        "client_type": oauth_client.client_type,
+        "redirect_uris": oauth_client.redirect_uris,
+        "allowed_scopes": oauth_client.allowed_scopes,
+        "is_active": oauth_client.is_active,
+        "updated_at": oauth_client.updated_at.isoformat()
+    }
+
+
+@router.delete("/oauth/clients/{client_id}", response_model=Dict[str, str])
+async def delete_oauth_client(
+    client_id: str,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete an OAuth client"""
+    
+    # Get the client
+    oauth_client = await db.get(OAuthClient, client_id)
+    if not oauth_client:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="OAuth client not found"
+        )
+    
+    # Log activity before deletion
+    activity = ActivityLog(
+        user_id=admin.id,
+        action_type=ActionType.DELETE.value,
+        resource_type="oauth_client",
+        resource_id=str(oauth_client.id),
+        access_method=AccessMethod.WEB.value,
+        details={
+            "client_name": oauth_client.client_name,
+            "client_id": oauth_client.client_id
+        }
+    )
+    db.add(activity)
+    
+    # Delete client (cascades will handle tokens and authorization codes)
+    await db.delete(oauth_client)
+    await db.commit()
+    
+    return {"message": f"OAuth client {oauth_client.client_name} deleted successfully"}
+
+
+@router.get("/oauth/tokens", response_model=Dict[str, Any])
+async def get_all_oauth_tokens(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    client_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    is_active: Optional[bool] = None,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get all OAuth tokens with filtering"""
+    
+    # Base query
+    query = select(OAuthToken).options(
+        joinedload(OAuthToken.client),
+        joinedload(OAuthToken.user),
+        joinedload(OAuthToken.mcp_agent)
+    )
+    
+    # Apply filters
+    if client_id:
+        query = query.where(OAuthToken.client_id == client_id)
+    
+    if user_id:
+        query = query.where(OAuthToken.user_id == user_id)
+    
+    if is_active is not None:
+        if is_active:
+            query = query.where(
+                OAuthToken.revoked_at.is_(None),
+                OAuthToken.access_token_expires_at > datetime.utcnow()
+            )
+        else:
+            query = query.where(
+                or_(
+                    OAuthToken.revoked_at.is_not(None),
+                    OAuthToken.access_token_expires_at <= datetime.utcnow()
+                )
+            )
+    
+    # Get total count
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = await db.scalar(count_query)
+    
+    # Apply pagination
+    query = query.offset(skip).limit(limit).order_by(OAuthToken.created_at.desc())
+    
+    # Execute query
+    result = await db.execute(query)
+    tokens = result.scalars().all()
+    
+    # Format response
+    token_data = []
+    for token in tokens:
+        token_dict = {
+            "id": str(token.id),
+            "client": {
+                "id": str(token.client.id),
+                "name": token.client.client_name
+            },
+            "user": {
+                "id": str(token.user.id),
+                "email": token.user.email,
+                "full_name": token.user.name
+            },
+            "scope": token.scope,
+            "device_id": token.device_id,
+            "device_name": token.device_name,
+            "is_active": not token.is_revoked and not token.is_access_token_expired,
+            "is_revoked": token.is_revoked,
+            "last_used_at": token.last_used_at.isoformat() if token.last_used_at else None,
+            "created_at": token.created_at.isoformat(),
+            "expires_at": token.access_token_expires_at.isoformat(),
+            "mcp_agent": {
+                "id": str(token.mcp_agent.id),
+                "name": token.mcp_agent.name
+            } if token.mcp_agent else None
+        }
+        token_data.append(token_dict)
+    
+    return {
+        "tokens": token_data,
+        "total": total_count or 0,
+        "skip": skip,
+        "limit": limit
+    }
+
+
+@router.post("/oauth/tokens/{token_id}/revoke", response_model=Dict[str, str])
+async def revoke_oauth_token(
+    token_id: str,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    """Revoke an OAuth token"""
+    
+    # Get the token
+    oauth_token = await db.get(OAuthToken, token_id)
+    if not oauth_token:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="OAuth token not found"
+        )
+    
+    if oauth_token.is_revoked:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Token is already revoked"
+        )
+    
+    # Revoke the token
+    oauth_token.revoke()
+    await db.commit()
+    
+    # Log activity
+    activity = ActivityLog(
+        user_id=admin.id,
+        action_type=ActionType.UPDATE.value,
+        resource_type="oauth_token",
+        resource_id=str(oauth_token.id),
+        access_method=AccessMethod.WEB.value,
+        details={
+            "action": "revoked",
+            "client_id": str(oauth_token.client_id),
+            "user_id": str(oauth_token.user_id)
+        }
+    )
+    db.add(activity)
+    await db.commit()
+    
+    return {"message": "OAuth token revoked successfully"}

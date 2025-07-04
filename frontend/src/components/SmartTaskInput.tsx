@@ -44,6 +44,7 @@ interface SmartTaskInputProps {
   onTaskCreated: (task: any) => void;
   workspaces: Workspace[];
   defaultWorkspaceId?: string;
+  defaultListId?: string;
 }
 
 interface ParsedTaskData {

@@ -25,7 +25,7 @@ from app.schemas.task import (
     TaskCreate, TaskUpdate, TaskResponse, TaskAssignmentCreate,
     TaskCommentCreate, TaskCommentResponse, TaskAttachmentResponse,
     TaskMoveRequest, TaskBulkOperation, DuplicateCheckResult,
-    TaskSearchQuery
+    TaskSearchQuery, SmartTaskRecommendation
 )
 from app.api.deps import get_current_user, get_access_info, get_access_info_direct, get_device_info
 from app.services.activity import log_activity
@@ -279,6 +279,158 @@ async def create_task(
     response.creator_name = current_user.name
     
     return response
+
+
+@router.get("/tasks/smart-recommendations", response_model=List[SmartTaskRecommendation])
+async def get_smart_task_recommendations(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(default=10, le=20)
+):
+    """
+    Get AI-powered smart task recommendations
+    
+    Combines Qdrant vector search with AI analysis to recommend
+    the most important tasks across all workspaces
+    """
+    from app.services.ai_service import get_ai_service
+    from app.schemas.task import SmartTaskRecommendation
+    
+    try:
+        # Get all user's active tasks across all workspaces
+        # Build query to get tasks from user's workspaces
+        workspace_subquery = select(Workspace.id).where(
+            or_(
+                Workspace.owner_id == current_user.id,
+                Workspace.id.in_(
+                    select(WorkspaceMember.workspace_id).where(
+                        WorkspaceMember.user_id == current_user.id
+                    )
+                )
+            )
+        )
+        
+        # Get tasks with eager loading
+        query = select(Task).join(
+            TaskList, Task.list_id == TaskList.id
+        ).join(
+            Workspace, TaskList.workspace_id == Workspace.id
+        ).where(
+            Workspace.id.in_(workspace_subquery),
+            Task.status.in_([TaskStatus.TODO, TaskStatus.IN_PROGRESS])
+        ).options(
+            selectinload(Task.list).selectinload(TaskList.workspace),
+            selectinload(Task.assignments).selectinload(TaskAssignment.user)
+        )
+        
+        result = await db.execute(query)
+        tasks = result.scalars().all()
+        
+        # Convert tasks to dict format for AI service
+        task_dicts = []
+        for task in tasks:
+            task_dict = {
+                'id': str(task.id),
+                'title': task.title,
+                'description': task.description,
+                'priority': task.priority.value,
+                'status': task.status.value,
+                'due_date': task.due_date.isoformat() if task.due_date else None,
+                'reminder_date': task.reminder_date.isoformat() if task.reminder_date else None,
+                'created_at': task.created_at.isoformat() if task.created_at else None,
+                'list_id': str(task.list_id),
+                'workspace_id': str(task.list.workspace_id) if task.list else None
+            }
+            task_dicts.append(task_dict)
+        
+        # Get AI service and generate recommendations
+        ai_service = get_ai_service()
+        recommendations = await ai_service.get_smart_task_recommendations(
+            user_id=str(current_user.id),
+            all_tasks=task_dicts,
+            limit=limit
+        )
+        
+        # Build response objects
+        recommendation_responses = []
+        for rec in recommendations:
+            # Find the full task object
+            task_id = rec['task']['id']
+            full_task = next((t for t in tasks if str(t.id) == task_id), None)
+            
+            if full_task:
+                # Build TaskResponse
+                creator = await db.get(User, full_task.created_by)
+                task_response = TaskResponse.model_validate(full_task)
+                task_response.creator_name = creator.name if creator else None
+                
+                # Add workspace and list data
+                if full_task.list:
+                    task_response.list = full_task.list
+                    if full_task.list.workspace:
+                        task_response.workspace = full_task.list.workspace
+                
+                # Add assigned users
+                if full_task.assignments:
+                    task_response.assigned_users = [
+                        {"id": str(a.user.id), "name": a.user.name, "email": a.user.email}
+                        for a in full_task.assignments
+                    ]
+                
+                # Create recommendation response
+                smart_rec = SmartTaskRecommendation(
+                    task=task_response,
+                    recommendation_reason=rec['recommendation_reason'],
+                    urgency_score=rec['urgency_score'],
+                    category=rec['category'],
+                    vector_relevance_score=rec.get('vector_relevance_score')
+                )
+                recommendation_responses.append(smart_rec)
+        
+        return recommendation_responses
+        
+    except Exception as e:
+        logger.error(f"Failed to get smart recommendations: {str(e)}")
+        # Fallback to recent tasks
+        query = select(Task).join(
+            TaskList, Task.list_id == TaskList.id
+        ).join(
+            Workspace, TaskList.workspace_id == Workspace.id
+        ).where(
+            Workspace.id.in_(workspace_subquery),
+            Task.status.in_([TaskStatus.TODO, TaskStatus.IN_PROGRESS])
+        ).options(
+            selectinload(Task.list).selectinload(TaskList.workspace)
+        ).order_by(
+            Task.created_at.desc()
+        ).limit(limit)
+        
+        result = await db.execute(query)
+        tasks = result.scalars().all()
+        
+        # Build fallback response
+        fallback_responses = []
+        for i, task in enumerate(tasks):
+            creator = await db.get(User, task.created_by)
+            task_response = TaskResponse.model_validate(task)
+            task_response.creator_name = creator.name if creator else None
+            
+            if task.list:
+                task_response.list = task.list
+                if task.list.workspace:
+                    task_response.workspace = task.list.workspace
+            
+            smart_rec = SmartTaskRecommendation(
+                task=task_response,
+                recommendation_reason="Recent task requiring attention",
+                urgency_score=0.5 - (i * 0.05),  # Decreasing score
+                category="recent",
+                vector_relevance_score=None
+            )
+            fallback_responses.append(smart_rec)
+        
+        return fallback_responses
 
 
 @router.get("/tasks/{task_id}", response_model=TaskResponse)
@@ -747,8 +899,11 @@ async def get_list_tasks(
             detail="Access denied to this list"
         )
     
-    # Build query
-    query = select(Task).where(Task.list_id == list_id)
+    # Build query with eager loading
+    query = select(Task).where(Task.list_id == list_id).options(
+        selectinload(Task.list).selectinload(TaskList.workspace),
+        selectinload(Task.assignments).selectinload(TaskAssignment.user)
+    )
     
     # Apply filters
     if status:
@@ -764,24 +919,23 @@ async def get_list_tasks(
     result = await db.execute(query)
     tasks = result.scalars().all()
     
-    # Build responses
+    # Build responses with workspace and list data
     responses = []
     for task in tasks:
         creator = await db.get(User, task.created_by)
         response = TaskResponse.model_validate(task)
         response.creator_name = creator.name if creator else None
         
-        # Get assignments
-        result = await db.execute(
-            select(TaskAssignment, User)
-            .join(User, User.id == TaskAssignment.user_id)
-            .where(TaskAssignment.task_id == task.id)
-        )
-        assignments = result.all()
-        response.assigned_users = [
-            {"id": user.id, "name": user.name, "email": user.email}
-            for _, user in assignments
-        ]
+        # Add workspace and list data
+        response.list = task_list
+        response.workspace = workspace
+        
+        # Add assigned users if already loaded
+        if task.assignments:
+            response.assigned_users = [
+                {"id": str(a.user.id), "name": a.user.name, "email": a.user.email}
+                for a in task.assignments
+            ]
         
         responses.append(response)
     
@@ -795,11 +949,14 @@ async def search_tasks(
     db: AsyncSession = Depends(get_db)
 ):
     """Search tasks across workspaces"""
-    # Build base query
+    # Build base query with eager loading of relationships
     query = select(Task).join(
         TaskList, Task.list_id == TaskList.id
     ).join(
         Workspace, TaskList.workspace_id == Workspace.id
+    ).options(
+        selectinload(Task.list).selectinload(TaskList.workspace),
+        selectinload(Task.assignments).selectinload(TaskAssignment.user)
     )
     
     # Filter by user's workspaces
@@ -879,12 +1036,26 @@ async def search_tasks(
     result = await db.execute(query)
     tasks = result.scalars().all()
     
-    # Build responses
+    # Build responses with workspace and list data
     responses = []
     for task in tasks:
         creator = await db.get(User, task.created_by)
         response = TaskResponse.model_validate(task)
         response.creator_name = creator.name if creator else None
+        
+        # Add workspace and list data
+        if task.list:
+            response.list = task.list
+            if task.list.workspace:
+                response.workspace = task.list.workspace
+        
+        # Add assigned users
+        if task.assignments:
+            response.assigned_users = [
+                {"id": str(a.user.id), "name": a.user.name, "email": a.user.email}
+                for a in task.assignments
+            ]
+        
         responses.append(response)
     
     return responses
@@ -1126,3 +1297,5 @@ async def delete_attachment(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete attachment"
         )
+
+

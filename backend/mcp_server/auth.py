@@ -1,6 +1,7 @@
 """
 MCP Server authentication handler
 Created: 2025-01-30 14:37:00 PST
+Updated: 2025-07-03 22:00:00 PST - Added OAuth support
 """
 
 import os
@@ -8,6 +9,9 @@ import httpx
 from typing import Optional, Dict, Any
 import asyncio
 from datetime import datetime, timedelta
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class MCPAuthManager:
@@ -17,24 +21,94 @@ class MCPAuthManager:
         self.api_key = os.environ.get("TODO_API_KEY", "")
         self.api_endpoint = os.environ.get("TODO_API_ENDPOINT", "http://localhost:8000/api/v1")
         self.device_name = os.environ.get("TODO_DEVICE_NAME", "MCP Agent")
+        self.device_id = os.environ.get("TODO_DEVICE_ID", "")
         self._session_token: Optional[str] = None
         self._token_expiry: Optional[datetime] = None
+        self._oauth_token: Optional[str] = None
+        self._token_cache: Dict[str, Dict[str, Any]] = {}  # Cache for validated tokens
+    
+    async def get_auth_headers(self, request_headers: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+        """
+        Get authentication headers based on available credentials
+        Supports both API key and OAuth token authentication
+        
+        Args:
+            request_headers: Optional headers from incoming request (for OAuth)
+            
+        Returns:
+            Headers to use for API requests
+        """
+        # Check for OAuth token in request headers (from Claude Desktop)
+        if request_headers and "Authorization" in request_headers:
+            auth_header = request_headers["Authorization"]
+            if auth_header.startswith("Bearer "):
+                oauth_token = auth_header[7:]
+                # Validate and use OAuth token
+                if await self.validate_oauth_token(oauth_token):
+                    return {"Authorization": f"Bearer {oauth_token}"}
+        
+        # Fall back to API key authentication
+        if self.api_key:
+            return {
+                "X-API-Key": self.api_key,
+                "X-Device-ID": self.device_id,
+                "X-Device-Name": self.device_name,
+                "X-Device-Type": "mcp_agent"
+            }
+        
+        # No authentication available
+        raise ValueError("No valid authentication credentials available")
     
     async def ensure_authenticated(self) -> Dict[str, str]:
         """
         Ensure we have a valid authentication token
         Returns headers to use for API requests
         """
-        # If using API key, just return headers with API key
-        if self.api_key:
-            return {
-                "X-API-Key": self.api_key,
-                "X-Device-Name": self.device_name,
-                "X-Device-Type": "mcp_agent"
-            }
+        # For backward compatibility, use get_auth_headers
+        return await self.get_auth_headers()
+    
+    async def validate_oauth_token(self, token: str) -> bool:
+        """
+        Validate OAuth token with the backend
         
-        # Otherwise, we need session-based auth (not implemented in this example)
-        raise ValueError("API key is required for MCP authentication")
+        Args:
+            token: OAuth access token
+            
+        Returns:
+            True if token is valid, False otherwise
+        """
+        # Check cache first
+        if token in self._token_cache:
+            cached = self._token_cache[token]
+            if cached["expires_at"] > datetime.utcnow():
+                return True
+            else:
+                # Remove expired token from cache
+                del self._token_cache[token]
+        
+        try:
+            async with httpx.AsyncClient(base_url=self.api_endpoint) as client:
+                # Validate token by calling the /auth/me endpoint
+                response = await client.get(
+                    "/auth/me",
+                    headers={"Authorization": f"Bearer {token}"}
+                )
+                
+                if response.status_code == 200:
+                    # Cache the validation result for 5 minutes
+                    self._token_cache[token] = {
+                        "valid": True,
+                        "expires_at": datetime.utcnow() + timedelta(minutes=5),
+                        "user_info": response.json()
+                    }
+                    return True
+                else:
+                    logger.warning(f"OAuth token validation failed: {response.status_code}")
+                    return False
+                    
+        except Exception as e:
+            logger.error(f"Error validating OAuth token: {str(e)}")
+            return False
     
     async def register_mcp_agent(self, user_email: str, user_password: str) -> Dict[str, Any]:
         """

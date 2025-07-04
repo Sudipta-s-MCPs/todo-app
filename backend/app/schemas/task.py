@@ -10,6 +10,7 @@ from uuid import UUID
 
 from app.models.task import TaskStatus, TaskPriority
 from app.models.user import AccessMethod
+from app.schemas.workspace import WorkspaceResponse, ListResponse
 
 
 class TaskCreate(BaseModel):
@@ -63,6 +64,8 @@ class TaskResponse(BaseModel):
     subtask_count: Optional[int] = 0
     comment_count: Optional[int] = 0
     attachment_count: Optional[int] = 0
+    workspace: Optional[WorkspaceResponse] = None
+    list: Optional[ListResponse] = None
     
     class Config:
         from_attributes = True
@@ -144,3 +147,14 @@ class TaskSearchQuery(BaseModel):
     parent_task_id: Optional[UUID] = None
     limit: int = Field(default=50, le=100)
     offset: int = Field(default=0, ge=0)
+
+
+class SmartTaskRecommendation(BaseModel):
+    task: TaskResponse
+    recommendation_reason: str
+    urgency_score: float = Field(ge=0.0, le=1.0)
+    category: str  # "overdue", "due_today", "high_priority", "reminder_soon", "stale", "related_cluster"
+    vector_relevance_score: Optional[float] = None
+    
+    class Config:
+        from_attributes = True

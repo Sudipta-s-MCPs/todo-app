@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box,
   Typography,
@@ -29,6 +30,7 @@ import {
   Delete as DeleteIcon,
   Done as DoneIcon,
   SmartToy as AIIcon,
+  ArrowBack as ArrowBackIcon,
 } from '@mui/icons-material';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSnackbar } from 'notistack';
@@ -39,11 +41,14 @@ import TaskDialog from '../components/TaskDialog';
 import SmartTaskInput from '../components/SmartTaskInput';
 import { taskService } from '../services/taskService';
 import { workspaceService } from '../services/workspaceService';
+import { listService } from '../services/listService';
 import type { Task, TaskCreate, TaskUpdate, Workspace } from '../types';
 
 export default function Tasks() {
   const queryClient = useQueryClient();
   const { enqueueSnackbar } = useSnackbar();
+  const navigate = useNavigate();
+  const { workspaceId, listId } = useParams<{ workspaceId?: string; listId?: string }>();
   
   // State
   const [tab, setTab] = useState<'all' | 'active' | 'completed'>('all');
@@ -68,9 +73,43 @@ export default function Tasks() {
 
   const workspaces = workspacesData || [];
 
+  // Query for specific workspace and list when filtering
+  const { data: currentWorkspace } = useQuery({
+    queryKey: ['workspace', workspaceId],
+    queryFn: () => workspaceService.getWorkspace(workspaceId!),
+    enabled: !!workspaceId,
+  });
+
+  const { data: currentList } = useQuery({
+    queryKey: ['list', workspaceId, listId],
+    queryFn: () => listService.getList(workspaceId!, listId!),
+    enabled: !!workspaceId && !!listId,
+  });
+
   const tasksQuery = useQuery({
-    queryKey: ['tasks', tab, debouncedSearch, selectedWorkspace, selectedPriority, sortBy, sortOrder],
+    queryKey: ['tasks', tab, debouncedSearch, selectedWorkspace, selectedPriority, sortBy, sortOrder, listId],
     queryFn: () => {
+      // If we have a specific listId, use getListTasks instead
+      if (listId) {
+        const params: any = {
+          limit: 50,
+          offset: 0,
+        };
+
+        if (tab === 'active') {
+          params.status = ['in_progress'];
+        } else if (tab === 'completed') {
+          params.status = ['completed'];
+        } else if (tab === 'all') {
+          params.status = ['todo', 'in_progress'];
+        }
+
+        if (selectedPriority) params.priority = [selectedPriority];
+
+        return taskService.getListTasks(listId, params);
+      }
+
+      // Otherwise use search
       const params: any = {
         query: debouncedSearch || undefined,
         limit: 50,
@@ -96,7 +135,11 @@ export default function Tasks() {
 
   // Mutations
   const createTaskMutation = useMutation({
-    mutationFn: (data: TaskCreate & { list_id?: string }) => taskService.createTask(data),
+    mutationFn: (data: TaskCreate & { list_id?: string }) => {
+      // If we're in a specific list view, use that listId
+      const taskData = listId ? { ...data, list_id: listId } : data;
+      return taskService.createTask(taskData);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
       queryClient.invalidateQueries({ queryKey: ['stats'] });
@@ -221,9 +264,26 @@ export default function Tasks() {
   return (
     <Box>
       <Box mb={3}>
-        <Typography variant="h4" gutterBottom>
-          Tasks
-        </Typography>
+        <Box display="flex" alignItems="center" gap={2} mb={2}>
+          {workspaceId && (
+            <IconButton onClick={() => navigate(`/workspaces/${workspaceId}/lists`)}>
+              <ArrowBackIcon />
+            </IconButton>
+          )}
+          <Box flex={1}>
+            <Typography variant="h4">
+              {currentList 
+                ? `${currentWorkspace?.emoji || '📁'} ${currentWorkspace?.name} / ${currentList.icon || '📋'} ${currentList.name}`
+                : 'Tasks'
+              }
+            </Typography>
+            {currentList && (
+              <Typography variant="body2" color="text.secondary">
+                Showing tasks from {currentList.name} list
+              </Typography>
+            )}
+          </Box>
+        </Box>
         
         <Box display="flex" alignItems="center" gap={2} mb={2}>
           <TextField
@@ -284,7 +344,7 @@ export default function Tasks() {
           )}
         </Box>
 
-        {hasFilters && (
+        {hasFilters && !listId && (
           <Box display="flex" gap={1} alignItems="center" mb={2}>
             <Typography variant="body2" color="text.secondary">
               Filters:
@@ -375,7 +435,8 @@ export default function Tasks() {
         onSave={handleSaveTask}
         task={editingTask}
         workspaces={workspaces}
-        defaultWorkspaceId={selectedWorkspace}
+        defaultWorkspaceId={workspaceId || selectedWorkspace}
+        defaultListId={listId}
       />
 
       <SmartTaskInput
@@ -387,7 +448,8 @@ export default function Tasks() {
           enqueueSnackbar('Task created successfully!', { variant: 'success' });
         }}
         workspaces={workspaces}
-        defaultWorkspaceId={selectedWorkspace}
+        defaultWorkspaceId={workspaceId || selectedWorkspace}
+        defaultListId={listId}
       />
 
       {/* Filter Menu */}
@@ -397,23 +459,27 @@ export default function Tasks() {
         onClose={() => setFilterMenuAnchor(null)}
       >
         <Box sx={{ p: 2, minWidth: 250 }}>
-          <Typography variant="subtitle2" gutterBottom>
-            Filter by Workspace
-          </Typography>
-          <FormControl fullWidth size="small" sx={{ mb: 2 }}>
-            <Select
-              value={selectedWorkspace}
-              onChange={(e) => setSelectedWorkspace(e.target.value)}
-              displayEmpty
-            >
-              <MenuItem value="">All Workspaces</MenuItem>
-              {workspaces.map((workspace: Workspace) => (
-                <MenuItem key={workspace.id} value={workspace.id}>
-                  {workspace.emoji} {workspace.name}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
+          {!listId && (
+            <>
+              <Typography variant="subtitle2" gutterBottom>
+                Filter by Workspace
+              </Typography>
+              <FormControl fullWidth size="small" sx={{ mb: 2 }}>
+                <Select
+                  value={selectedWorkspace}
+                  onChange={(e) => setSelectedWorkspace(e.target.value)}
+                  displayEmpty
+                >
+                  <MenuItem value="">All Workspaces</MenuItem>
+                  {workspaces.map((workspace: Workspace) => (
+                    <MenuItem key={workspace.id} value={workspace.id}>
+                      {workspace.emoji} {workspace.name}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </>
+          )}
 
           <Typography variant="subtitle2" gutterBottom>
             Filter by Priority

@@ -123,6 +123,7 @@ export interface Task {
   reminder_date?: string;
   workspace?: Workspace;
   workspace_id?: string;
+  list?: List;
 }
 
 export interface TaskAttachment {
@@ -318,3 +319,12 @@ export interface TasksResponse {
 }
 
 export type WorkspacesResponse = Workspace[];
+
+// Smart Task Recommendation Types
+export interface SmartTaskRecommendation {
+  task: Task;
+  recommendation_reason: string;
+  urgency_score: number;
+  category: string;
+  vector_relevance_score?: number;
+}

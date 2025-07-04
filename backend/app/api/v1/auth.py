@@ -40,6 +40,9 @@ from app.services.ldap import ldap_service, create_user_from_ldap, sync_user_fro
 
 router = APIRouter()
 
+# Import OAuth router
+from . import auth_oauth
+
 
 @router.post("/register", response_model=UserInfo, status_code=status.HTTP_201_CREATED)
 @rate_limit(requests_per_minute=5)  # Limit registration attempts
@@ -1145,3 +1148,6 @@ async def search_ldap_users(
         }
         for user in ldap_users
     ]
+
+# Include OAuth routes
+router.include_router(auth_oauth.router)

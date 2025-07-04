@@ -48,6 +48,7 @@ interface TaskDialogProps {
   task?: Task;
   workspaces: Workspace[];
   defaultWorkspaceId?: string;
+  defaultListId?: string;
 }
 
 export default function TaskDialog({
@@ -57,6 +58,7 @@ export default function TaskDialog({
   task,
   workspaces,
   defaultWorkspaceId,
+  defaultListId,
 }: TaskDialogProps) {
   const { enqueueSnackbar } = useSnackbar();
   const [isLoading, setIsLoading] = useState(false);
@@ -82,7 +84,7 @@ export default function TaskDialog({
       title: '',
       description: '',
       workspace_id: defaultWorkspaceId || '',
-      list_id: undefined,
+      list_id: defaultListId || undefined,
       priority: 'medium',
       status: 'todo',
       due_date: undefined,
@@ -111,7 +113,7 @@ export default function TaskDialog({
         title: '',
         description: '',
         workspace_id: defaultWorkspaceId || '',
-        list_id: undefined,
+        list_id: defaultListId || undefined,
         priority: 'medium',
         status: 'todo',
         due_date: undefined,
@@ -123,7 +125,7 @@ export default function TaskDialog({
     // Reset duplicate state when dialog opens/closes
     setDuplicateError(null);
     setShowDuplicateAlert(false);
-  }, [task, defaultWorkspaceId, reset]);
+  }, [task, defaultWorkspaceId, defaultListId, reset]);
 
   // Fetch lists when workspace changes
   useEffect(() => {
@@ -135,8 +137,10 @@ export default function TaskDialog({
           setLists(fetchedLists);
           // If no list is selected and there's a default list, select it
           const defaultList = fetchedLists.find(list => list.is_default);
-          if (!watch('list_id') && defaultList) {
+          if (!watch('list_id') && !defaultListId && defaultList) {
             setValue('list_id', defaultList.id);
+          } else if (defaultListId && lists.find(l => l.id === defaultListId)) {
+            setValue('list_id', defaultListId);
           }
         })
         .catch((error) => {

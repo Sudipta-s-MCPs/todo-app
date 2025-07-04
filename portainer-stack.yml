@@ -15,8 +15,8 @@ services:
       
       # API Configuration
       - API_V1_PREFIX=/api/v1
-      - API_BASE_URL=http://192.168.11.100:5482
-      - CORS_ORIGINS=["http://192.168.11.100:5483", "http://192.168.11.100:5484", "http://192.168.11.100:5482", "https://192.168.11.100:5483", "https://192.168.11.100:5484", "https://192.168.11.100:5482"]
+      - API_BASE_URL=http://192.168.11.108:5482
+      - CORS_ORIGINS=["http://192.168.11.108:5483", "http://192.168.11.108:5484", "http://192.168.11.108:5482", "https://192.168.11.108:5483", "https://192.168.11.108:5484", "https://192.168.11.108:5482"]
       
       # MCP Configuration
       - MCP_SERVER_NAME=TodoApp
@@ -30,8 +30,6 @@ services:
       
       # Monitoring
       - LOG_LEVEL=INFO
-    networks:
-      - todo-app-net
     deploy:
       replicas: 1
       restart_policy:
@@ -55,9 +53,7 @@ services:
     ports:
       - "5484:80"
     environment:
-      - VITE_API_URL=http://192.168.11.100:5482/api/v1
-    networks:
-      - todo-app-net
+      - VITE_API_URL=http://192.168.11.108:5482/api/v1
     deploy:
       replicas: 1
       restart_policy:
@@ -81,9 +77,7 @@ services:
     ports:
       - "5483:80"
     environment:
-      - VITE_API_URL=http://192.168.11.100:5482/api/v1
-    networks:
-      - todo-app-net
+      - VITE_API_URL=http://192.168.11.108:5482/api/v1
     deploy:
       replicas: 1
       restart_policy:
@@ -107,7 +101,7 @@ services:
     ports:
       - "5485:5485"
     environment:
-      - TODO_API_ENDPOINT=http://192.168.11.100:5482/api/v1
+      - TODO_API_ENDPOINT=http://192.168.11.108:5482/api/v1
       - MCP_SERVER_NAME=TodoApp
       - MCP_SERVER_VERSION=1.0.0
       - PYTHONPATH=/app
@@ -116,8 +110,6 @@ services:
       - TODO_USER_ID=${TODO_USER_ID:-}
       - TODO_DEVICE_ID=${TODO_DEVICE_ID:-}
       - TODO_DEVICE_NAME=${TODO_DEVICE_NAME:-Claude Desktop}
-    networks:
-      - todo-app-net
     deploy:
       replicas: 1
       restart_policy:
@@ -136,9 +128,6 @@ services:
       retries: 3
       start_period: 30s
 
-networks:
-  todo-app-net:
-    external: true
 # Note: This stack uses external PostgreSQL and Redis running on the Synology NAS
 # Make sure the following services are running on your NAS:
 # - PostgreSQL on port 15432 with database 'sd_todo_app_db'
@@ -146,6 +135,6 @@ networks:
 # 
 # To deploy:
 # 1. Copy this file to your Portainer stacks
-# 2. Update IP addresses if different from 192.168.11.100
+# 2. Update IP addresses if different from 192.168.11.108
 # 3. Update environment variables as needed
 # 4. Deploy the stack

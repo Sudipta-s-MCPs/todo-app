@@ -1,8 +1,225 @@
-# Smart-ToDo Application
+# Smart-ToDo - Production Ready Task Management System
 
-**Created**: 2025-01-30 13:45:00 PST  
-**Last Modified**: 2025-01-30 15:10:00 PST  
-**Version**: 1.0.0
+Advanced ToDo Application with MCP (Model Context Protocol) integration for Claude Desktop.
+
+## 🚀 Features
+
+- **Full-Featured Task Management**: Workspaces, lists, tasks with priorities, due dates, and attachments
+- **Claude Desktop Integration**: Native MCP server for seamless AI task management
+- **Progressive Web App**: Mobile-first React frontend with offline capabilities
+- **Admin Panel**: Comprehensive system administration interface
+- **Multi-Architecture Support**: Docker images for AMD64 and ARM64
+- **Production Ready**: External database/Redis, health monitoring, proper logging
+
+## 🏗️ Architecture
+
+### Services
+- **Backend API**: FastAPI with SQLAlchemy, Redis caching, JWT authentication
+- **Frontend PWA**: React TypeScript with Material-UI, service worker
+- **Admin Panel**: React administration interface
+- **MCP Server**: Claude Desktop integration server
+
+### External Dependencies
+- **PostgreSQL**: Primary database (running on Synology NAS)
+- **Redis**: Caching and session storage (running on Synology NAS)
+
+## 🐋 Docker Deployment
+
+### Quick Deploy with Portainer
+
+1. **Use the provided Portainer stack**:
+   ```bash
+   # Copy portainer-stack.yml to your Portainer stacks
+   # Update IP addresses and environment variables as needed
+   ```
+
+2. **Deploy the stack** in Portainer on your Synology NAS
+
+### Manual Docker Deployment
+
+```bash
+# Pull all images
+docker pull ghcr.io/sudipta-s-mcps/smart-todo-backend:latest
+docker pull ghcr.io/sudipta-s-mcps/smart-todo-frontend:latest
+docker pull ghcr.io/sudipta-s-mcps/smart-todo-admin:latest
+docker pull ghcr.io/sudipta-s-mcps/smart-todo-mcp:latest
+
+# Deploy using docker-compose or the provided stack
+```
+
+## 🔧 Building from Source
+
+### Prerequisites
+- Docker with buildx support
+- GitHub Personal Access Token with package write permissions
+
+### Environment Setup
+```bash
+export GITHUB_USERNAME=your_github_username
+export GITHUB_PAT=your_personal_access_token
+```
+
+### Build All Services
+```bash
+# Build and push all services
+./build_and_push.sh --all v1.0.0
+
+# Build individual services
+./build_and_push.sh backend v1.0.0
+./build_and_push.sh frontend v1.0.0
+./build_and_push.sh admin v1.0.0
+./build_and_push.sh mcp v1.0.0
+```
+
+## 🌐 Access Points
+
+After deployment on Synology NAS (IP: 192.168.11.100):
+
+- **Frontend PWA**: http://192.168.11.100:5484
+- **Admin Panel**: http://192.168.11.100:5483
+- **Backend API**: http://192.168.11.100:5482
+- **MCP Server**: http://192.168.11.100:5485
+
+## 🤖 Claude Desktop Integration
+
+### Setup MCP Integration
+
+1. **Configure Claude Desktop** with the MCP server endpoint:
+   ```json
+   {
+     "mcpServers": {
+       "todo-app": {
+         "command": "stdio",
+         "args": ["python", "/path/to/mcp_stdio_bridge.py"]
+       }
+     }
+   }
+   ```
+
+2. **Available MCP Tools**:
+   - `list_tasks` - Retrieve tasks with filtering
+   - `get_lists` - Fetch all lists by workspace
+   - `create_list` - Create new lists
+   - `create_task` - Create new tasks
+   - `update_task` - Update task properties
+   - `complete_task` - Mark tasks as completed
+   - `search_tasks` - Search tasks by text
+   - `move_task` - Move tasks between lists
+   - `get_upcoming_tasks` - Get tasks with due dates
+   - `delete_task` - Archive/delete tasks
+
+## 🏥 Health Monitoring
+
+### Health Check Endpoints
+```bash
+# Backend API health
+curl http://192.168.11.100:5482/health
+
+# Frontend availability
+curl http://192.168.11.100:5484/
+
+# Admin panel availability
+curl http://192.168.11.100:5483/
+
+# MCP server health
+curl http://192.168.11.100:5485/mcp/
+```
+
+### System Monitoring
+- **Redis Status**: `/api/v1/system/redis-status` (admin only)
+- **Services Status**: `/api/v1/system/services-status` (admin only)
+- **System Info**: `/api/v1/system/info` (admin only)
+
+## ⚙️ Configuration
+
+### Environment Variables
+
+Key production configuration in `portainer-stack.yml`:
+
+```yaml
+environment:
+  - ENVIRONMENT=production
+  - DATABASE_URL=postgresql+asyncpg://user:pass@192.168.11.100:15432/db
+  - REDIS_URL=redis://192.168.11.100:6379/0
+  - SECRET_KEY=your_secret_key
+  - API_BASE_URL=http://192.168.11.100:5482
+  - CORS_ORIGINS=["http://192.168.11.100:5483","http://192.168.11.100:5484"]
+```
+
+### Database Setup
+
+Ensure PostgreSQL is running on your Synology NAS:
+- **Host**: 192.168.11.100
+- **Port**: 15432
+- **Database**: sd_todo_app_db
+- **User**: sd_todo_app_user
+
+### Redis Setup
+
+Ensure Redis is running on your Synology NAS:
+- **Host**: 192.168.11.100
+- **Port**: 6379
+- **Database**: 0
+
+## 🔒 Security Features
+
+- **Non-root containers**: All images run as user ID 1000
+- **JWT authentication**: Secure API access
+- **Rate limiting**: Request throttling with Redis
+- **CORS protection**: Configurable allowed origins
+- **Health checks**: Automatic container monitoring
+- **Input validation**: Comprehensive request validation
+
+## 📊 Production Features
+
+- **Activity Logging**: Comprehensive user action tracking
+- **Device Management**: Multi-device session handling
+- **Admin Panel**: User management, system monitoring
+- **WebSocket Support**: Real-time updates
+- **File Attachments**: Task file upload support
+- **Duplicate Detection**: Smart task similarity checking
+- **Caching**: Redis-based response caching
+
+## 🔄 Updates
+
+To update the deployment:
+
+1. **Build new images**:
+   ```bash
+   ./build_and_push.sh --all v1.1.0
+   ```
+
+2. **Update Portainer stack** with new image tags
+
+3. **Redeploy** the stack in Portainer
+
+## 📚 Documentation
+
+- **API Documentation**: Available at `/docs` endpoint
+- **Admin Guide**: Access via admin panel
+- **MCP Integration**: See Claude Desktop documentation
+
+## 🛠️ Development
+
+For local development:
+
+```bash
+# Start development environment
+docker-compose up -d
+
+# Backend will be available at http://localhost:5482
+# Frontend at http://localhost:5484
+# Admin panel at http://localhost:5483
+# MCP server at http://localhost:5485
+```
+
+## 📝 License
+
+This project is for personal use. All rights reserved.
+
+---
+
+**Built with ❤️ for Synology NAS deployment via Portainer**
 
 ## Overview
 

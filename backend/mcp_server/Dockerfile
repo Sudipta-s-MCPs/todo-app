@@ -4,14 +4,18 @@ FROM python:3.11-alpine
 # Set working directory
 WORKDIR /app
 
-# Install minimal runtime dependencies only
-RUN apk add --no-cache curl && \
+# Install build and runtime dependencies
+RUN apk add --no-cache \
+    gcc \
+    musl-dev \
+    linux-headers \
+    curl && \
     rm -rf /var/cache/apk/*
 
-# Copy minimal requirements and install
-COPY ../requirements-mcp.txt .
-RUN pip install --no-cache-dir -r requirements-mcp.txt && \
-    rm requirements-mcp.txt
+# Copy requirements and install
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt && \
+    rm requirements.txt
 
 # Create non-root user
 RUN adduser -D -u 1000 mcp

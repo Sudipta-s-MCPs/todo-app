@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # Startup script for backend
 # Created: 2025-01-30 14:50:00 PST
 

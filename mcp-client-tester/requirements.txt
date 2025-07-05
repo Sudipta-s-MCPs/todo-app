@@ -1,4 +1,0 @@
-httpx==0.27.0
-pydantic==2.5.0
-asyncio-mqtt==0.16.1
-rich==13.7.0

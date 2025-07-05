@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     )
 
     # Database
-    DATABASE_URL: Optional[PostgresDsn] = Field(
+    DATABASE_URL: Optional[str] = Field(
         default=None,
         description="PostgreSQL database URL (required in production)"
     )

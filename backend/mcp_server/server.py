@@ -57,29 +57,36 @@ class TaskUpdateRequest(BaseModel):
 def get_http_client(ctx: Optional[Context] = None) -> httpx.AsyncClient:
     """Get configured HTTP client with proper authentication
     
-    Authentication is extracted from HTTP request headers using FastMCP's built-in support.
-    This server does NOT use environment variables for authentication.
+    This attempts to get auth headers from the HTTP request context.
+    Falls back to a basic client if no auth is available.
     """
-    # Get headers from the current HTTP request using FastMCP
-    request_headers = get_http_headers()
-    
-    # Extract authentication headers
     auth_headers = {}
-    for key, value in request_headers.items():
-        if key.lower() in ['x-api-key', 'x-device-id', 'x-device-name', 'x-user-id']:
-            # Normalize header names
-            normalized_key = 'X-' + '-'.join(word.capitalize() for word in key[2:].split('-'))
-            auth_headers[normalized_key] = value
+    
+    try:
+        # Try to get headers from the current HTTP request using FastMCP
+        request_headers = get_http_headers()
+        
+        # Extract authentication headers
+        for key, value in request_headers.items():
+            if key.lower() in ['x-api-key', 'x-device-id', 'x-device-name', 'x-user-id']:
+                # Normalize header names
+                normalized_key = 'X-' + '-'.join(word.capitalize() for word in key[2:].split('-'))
+                auth_headers[normalized_key] = value
+        
+        if auth_headers.get('X-API-Key'):
+            # Add device type for MCP agents
+            auth_headers['X-Device-Type'] = 'mcp_agent'
+            api_key = auth_headers.get("X-API-Key", "")
+            logger.debug(f"Using auth from HTTP headers: API Key ending in ...{api_key[-4:] if len(api_key) > 4 else 'XXXX'}")
+        else:
+            logger.warning("No X-API-Key found in request headers")
+            
+    except Exception as e:
+        logger.warning(f"Could not extract headers from request: {e}")
     
     if not auth_headers.get('X-API-Key'):
-        logger.error("No X-API-Key found in request headers")
+        logger.error("No authentication available for API request")
         raise ValueError("Authentication required. MCP client must provide X-API-Key header.")
-    
-    # Add device type for MCP agents
-    auth_headers['X-Device-Type'] = 'mcp_agent'
-    
-    api_key = auth_headers.get("X-API-Key", "")
-    logger.debug(f"Using auth from HTTP headers: API Key ending in ...{api_key[-4:] if len(api_key) > 4 else 'XXXX'}")
     
     return httpx.AsyncClient(
         base_url=API_ENDPOINT,

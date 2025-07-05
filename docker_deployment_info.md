@@ -1,14 +1,14 @@
 # Docker Image Deployment Information
 
 ## Image Details
-- **Image**: `ghcr.io/sudipta-s-mcps/smart-todo-mcp:latest`
+- **Image**: `ghcr.io/sudipta-s-mcps/smart-todo-admin:latest`
 - **Platforms**: linux/amd64,linux/arm64
 - **Registry**: GitHub Container Registry (ghcr.io)
-- **Build Date**: 2025-07-05 07:21:05 UTC
+- **Build Date**: 2025-07-05 12:46:03 UTC
 
 ## Pull Command
 ```bash
-docker pull ghcr.io/sudipta-s-mcps/smart-todo-mcp:latest
+docker pull ghcr.io/sudipta-s-mcps/smart-todo-admin:latest
 ```
 
 ## Portainer Stack Usage
@@ -17,7 +17,7 @@ Update your `portainer-stack.yml` to use this image:
 ```yaml
 services:
   smart-todo-service:
-    image: ghcr.io/sudipta-s-mcps/smart-todo-mcp:latest
+    image: ghcr.io/sudipta-s-mcps/smart-todo-admin:latest
     # ... rest of your configuration
 ```
 
@@ -30,7 +30,7 @@ services:
 ## Verification
 ```bash
 # Check image layers
-docker history ghcr.io/sudipta-s-mcps/smart-todo-mcp:latest
+docker history ghcr.io/sudipta-s-mcps/smart-todo-admin:latest
 
 # Test health endpoint (backend only)
 curl http://localhost:8000/health

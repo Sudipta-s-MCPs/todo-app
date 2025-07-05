@@ -16,9 +16,9 @@ WORKDIR /app
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy production requirements only
-COPY requirements-prod.txt .
-RUN pip install --no-cache-dir -r requirements-prod.txt
+# Copy requirements
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Production stage - Ultra minimal
 FROM python:3.11-alpine

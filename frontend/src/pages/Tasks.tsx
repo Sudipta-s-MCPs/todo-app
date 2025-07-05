@@ -38,6 +38,7 @@ import { useDebounce } from 'use-debounce';
 
 import TaskCard from '../components/TaskCard';
 import TaskDialog from '../components/TaskDialog';
+import TaskDetailsDialog from '../components/TaskDetailsDialog';
 import SmartTaskInput from '../components/SmartTaskInput';
 import { taskService } from '../services/taskService';
 import { workspaceService } from '../services/workspaceService';
@@ -51,7 +52,7 @@ export default function Tasks() {
   const { workspaceId, listId } = useParams<{ workspaceId?: string; listId?: string }>();
   
   // State
-  const [tab, setTab] = useState<'all' | 'active' | 'completed'>('all');
+  const [tab, setTab] = useState<'all' | 'active' | 'completed' | 'archived'>('all');
   const [search, setSearch] = useState('');
   const [debouncedSearch] = useDebounce(search, 300);
   const [selectedWorkspace, setSelectedWorkspace] = useState<string>('');
@@ -62,6 +63,8 @@ export default function Tasks() {
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [smartTaskDialogOpen, setSmartTaskDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | undefined>();
+  const [viewingTask, setViewingTask] = useState<Task | undefined>();
+  const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
   const [filterMenuAnchor, setFilterMenuAnchor] = useState<null | HTMLElement>(null);
   const [sortMenuAnchor, setSortMenuAnchor] = useState<null | HTMLElement>(null);
 
@@ -100,6 +103,8 @@ export default function Tasks() {
           params.status = ['in_progress'];
         } else if (tab === 'completed') {
           params.status = ['completed'];
+        } else if (tab === 'archived') {
+          params.status = ['archived'];
         } else if (tab === 'all') {
           params.status = ['todo', 'in_progress'];
         }
@@ -123,6 +128,8 @@ export default function Tasks() {
         params.status = ['in_progress'];
       } else if (tab === 'completed') {
         params.status = ['completed'];
+      } else if (tab === 'archived') {
+        params.status = ['archived'];
       } else if (tab === 'all') {
         params.status = ['todo', 'in_progress'];
       }
@@ -132,6 +139,15 @@ export default function Tasks() {
   });
 
   const tasks = tasksQuery.data || [];
+
+  // Defensive filter: only show tasks matching the current tab's status
+  const filteredTasks = tasks.filter((task) => {
+    if (tab === 'active') return task.status === 'in_progress';
+    if (tab === 'completed') return task.status === 'completed';
+    if (tab === 'archived') return task.status === 'archived';
+    if (tab === 'all') return task.status === 'todo' || task.status === 'in_progress';
+    return true;
+  });
 
   // Mutations
   const createTaskMutation = useMutation({
@@ -172,6 +188,70 @@ export default function Tasks() {
   const handleEditTask = (task: Task) => {
     setEditingTask(task);
     setTaskDialogOpen(true);
+  };
+
+  const handleViewTask = (task: Task) => {
+    setViewingTask(task);
+    setDetailsDialogOpen(true);
+  };
+
+  const handleEditFromDetails = () => {
+    if (viewingTask) {
+      setDetailsDialogOpen(false);
+      setEditingTask(viewingTask);
+      setTaskDialogOpen(true);
+    }
+  };
+
+  const handleDeleteFromDetails = async () => {
+    if (viewingTask) {
+      setDetailsDialogOpen(false);
+      await handleDeleteTask(viewingTask);
+    }
+  };
+
+  const handleToggleFromDetails = async () => {
+    if (viewingTask) {
+      await handleToggleTaskStatus(viewingTask);
+      // Update the viewing task with new status
+      const newStatus = viewingTask.status === 'completed' ? 'todo' : 'completed';
+      setViewingTask({ ...viewingTask, status: newStatus });
+    }
+  };
+
+  const handleArchiveTask = async () => {
+    if (viewingTask) {
+      try {
+        await updateTaskMutation.mutateAsync({
+          id: viewingTask.id,
+          data: { status: 'archived' }
+        });
+        enqueueSnackbar('Task archived successfully', { variant: 'success' });
+        setDetailsDialogOpen(false);
+        setViewingTask(undefined);
+      } catch (error: any) {
+        enqueueSnackbar(error.response?.data?.detail || 'Failed to archive task', {
+          variant: 'error',
+        });
+      }
+    }
+  };
+
+  const handleUnarchiveTask = async () => {
+    if (viewingTask) {
+      try {
+        await updateTaskMutation.mutateAsync({
+          id: viewingTask.id,
+          data: { status: 'todo' }
+        });
+        enqueueSnackbar('Task restored successfully', { variant: 'success' });
+        setViewingTask({ ...viewingTask, status: 'todo' });
+      } catch (error: any) {
+        enqueueSnackbar(error.response?.data?.detail || 'Failed to restore task', {
+          variant: 'error',
+        });
+      }
+    }
   };
 
   const handleSaveTask = async (data: TaskCreate & { list_id?: string } | TaskUpdate) => {
@@ -373,6 +453,7 @@ export default function Tasks() {
           <Tab label="All Tasks" value="all" />
           <Tab label="Active" value="active" />
           <Tab label="Completed" value="completed" />
+          <Tab label="Archived" value="archived" />
         </Tabs>
       </Box>
 
@@ -380,7 +461,7 @@ export default function Tasks() {
         <Box display="flex" justifyContent="center" py={4}>
           <CircularProgress />
         </Box>
-      ) : tasks.length === 0 ? (
+      ) : filteredTasks.length === 0 ? (
         <Paper sx={{ p: 4, textAlign: 'center' }}>
           <Typography variant="h6" color="text.secondary" gutterBottom>
             No tasks found
@@ -398,7 +479,7 @@ export default function Tasks() {
         </Paper>
       ) : (
         <Box>
-          {tasks.map((task) => (
+          {filteredTasks.map((task) => (
             <TaskCard
               key={task.id}
               task={task}
@@ -406,6 +487,7 @@ export default function Tasks() {
               onDelete={handleDeleteTask}
               onToggleStatus={handleToggleTaskStatus}
               onSelect={handleSelectTask}
+              onView={handleViewTask}
               selected={selectedTasks.has(task.id)}
             />
           ))}
@@ -431,7 +513,14 @@ export default function Tasks() {
 
       <TaskDialog
         open={taskDialogOpen}
-        onClose={() => setTaskDialogOpen(false)}
+        onClose={() => {
+          setTaskDialogOpen(false);
+          setEditingTask(undefined);
+          // If we came from details view, update the viewing task
+          if (viewingTask && editingTask && viewingTask.id === editingTask.id) {
+            queryClient.invalidateQueries({ queryKey: ['tasks'] });
+          }
+        }}
         onSave={handleSaveTask}
         task={editingTask}
         workspaces={workspaces}
@@ -536,6 +625,21 @@ export default function Tasks() {
           </FormControl>
         </Box>
       </Menu>
+
+      {/* Task Details Dialog */}
+      <TaskDetailsDialog
+        open={detailsDialogOpen}
+        onClose={() => {
+          setDetailsDialogOpen(false);
+          setViewingTask(undefined);
+        }}
+        task={viewingTask || null}
+        onEdit={handleEditFromDetails}
+        onDelete={handleDeleteFromDetails}
+        onToggleStatus={handleToggleFromDetails}
+        onArchive={handleArchiveTask}
+        onUnarchive={handleUnarchiveTask}
+      />
     </Box>
   );
 }

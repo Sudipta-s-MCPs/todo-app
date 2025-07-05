@@ -29,13 +29,6 @@ except ImportError:
     QDRANT_AVAILABLE = False
     logger.warning("Qdrant dependencies not available - vector search disabled")
 
-try:
-    from sentence_transformers import SentenceTransformer
-    SENTENCE_TRANSFORMERS_AVAILABLE = True
-except ImportError:
-    SENTENCE_TRANSFORMERS_AVAILABLE = False
-    logger.warning("Sentence transformers not available - vector embeddings disabled")
-
 
 class VectorService:
     """Service for managing task embeddings in Qdrant"""
@@ -46,13 +39,13 @@ class VectorService:
         self.api_key = dynamic_settings.QDRANT_API_KEY or None
         self.collection_name = dynamic_settings.QDRANT_COLLECTION_NAME
         self.embedding_model_name = dynamic_settings.QDRANT_EMBEDDING_MODEL
+        self.hf_provider = None
+        self.vector_size = 384  # Default size for all-MiniLM-L6-v2
         
         # Check if dependencies are available
-        if not QDRANT_AVAILABLE or not SENTENCE_TRANSFORMERS_AVAILABLE:
+        if not QDRANT_AVAILABLE:
             self.client = None
-            self.embedding_model = None
-            self.vector_size = 384  # Default size for MiniLM
-            logger.warning("Vector service disabled due to missing dependencies")
+            logger.warning("Vector service disabled due to missing Qdrant dependencies")
             return
         
         try:
@@ -64,16 +57,11 @@ class VectorService:
                 timeout=10
             )
             
-            # Initialize embedding model
-            self.embedding_model = SentenceTransformer(self.embedding_model_name)
-            self.vector_size = self.embedding_model.get_sentence_embedding_dimension()
-            
             # Create collection if it doesn't exist
             self._ensure_collection()
         except Exception as e:
             logger.error(f"Failed to initialize vector service: {str(e)}")
             self.client = None
-            self.embedding_model = None
     
     def _ensure_collection(self):
         """Ensure the collection exists with proper configuration"""
@@ -97,23 +85,46 @@ class VectorService:
             logger.error(f"Failed to ensure collection: {str(e)}")
             raise
     
-    def generate_embedding(self, text: str) -> List[float]:
-        """Generate embedding for a text"""
-        if not self.embedding_model:
-            logger.warning("Embedding model not available - returning empty vector")
+    async def _get_hf_provider(self):
+        """Get or initialize HuggingFace provider for embeddings"""
+        if self.hf_provider is None:
+            from app.services.ai_providers.huggingface_provider import HuggingFaceProvider
+            self.hf_provider = HuggingFaceProvider()
+            if not await self.hf_provider.initialize():
+                logger.error("Failed to initialize HuggingFace provider for embeddings")
+                self.hf_provider = None
+        return self.hf_provider
+    
+    async def generate_embedding(self, text: str) -> List[float]:
+        """Generate embedding for a text using HuggingFace API"""
+        provider = await self._get_hf_provider()
+        if not provider:
+            logger.warning("HuggingFace provider not available - returning empty vector")
+            logger.info("Please ensure HUGGINGFACE_API_TOKEN is configured in settings")
             return [0.0] * self.vector_size
         
-        embedding = self.embedding_model.encode(text, convert_to_tensor=False)
-        return embedding.tolist()
+        try:
+            embedding = await provider.generate_embedding(text)
+            return embedding
+        except Exception as e:
+            logger.error(f"Failed to generate embedding via HuggingFace: {str(e)}")
+            logger.info("Check your HuggingFace API token and network connectivity")
+            # Return empty vector to allow graceful degradation
+            return [0.0] * self.vector_size
     
     async def generate_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
-        """Generate embeddings for multiple texts efficiently"""
-        if not self.embedding_model:
-            logger.warning("Embedding model not available - returning empty vectors")
+        """Generate embeddings for multiple texts efficiently using HuggingFace API"""
+        provider = await self._get_hf_provider()
+        if not provider:
+            logger.warning("HuggingFace provider not available - returning empty vectors")
             return [[0.0] * self.vector_size for _ in texts]
         
-        embeddings = self.embedding_model.encode(texts, convert_to_tensor=False)
-        return embeddings.tolist()
+        try:
+            embeddings = await provider.generate_embeddings_batch(texts)
+            return embeddings
+        except Exception as e:
+            logger.error(f"Failed to generate batch embeddings via HuggingFace: {str(e)}")
+            return [[0.0] * self.vector_size for _ in texts]
     
     async def upsert_task(
         self, 
@@ -136,7 +147,7 @@ class VectorService:
         try:
             # Combine title and description for embedding
             text_content = f"{title}. {description or ''}"
-            embedding = self.generate_embedding(text_content)
+            embedding = await self.generate_embedding(text_content)
             
             # Prepare metadata
             payload = {
@@ -189,7 +200,7 @@ class VectorService:
             
         try:
             # Generate query embedding
-            query_embedding = self.generate_embedding(query_text)
+            query_embedding = await self.generate_embedding(query_text)
             
             # Build filter conditions
             must_conditions = []

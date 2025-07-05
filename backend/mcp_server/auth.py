@@ -26,6 +26,14 @@ class MCPAuthManager:
         self._token_expiry: Optional[datetime] = None
         self._oauth_token: Optional[str] = None
         self._token_cache: Dict[str, Dict[str, Any]] = {}  # Cache for validated tokens
+        
+        # Log initialization
+        logger.info("MCPAuthManager initialized")
+        logger.info(f"API Key configured: {'Yes' if self.api_key else 'No'}")
+        if self.api_key:
+            logger.info(f"API Key ending: ...{self.api_key[-4:]}")
+        logger.info(f"Device ID: {self.device_id}")
+        logger.info(f"API Endpoint: {self.api_endpoint}")
     
     async def get_auth_headers(self, request_headers: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         """
@@ -38,17 +46,31 @@ class MCPAuthManager:
         Returns:
             Headers to use for API requests
         """
-        # Check for OAuth token in request headers (from Claude Desktop)
-        if request_headers and "Authorization" in request_headers:
-            auth_header = request_headers["Authorization"]
-            if auth_header.startswith("Bearer "):
-                oauth_token = auth_header[7:]
-                # Validate and use OAuth token
-                if await self.validate_oauth_token(oauth_token):
-                    return {"Authorization": f"Bearer {oauth_token}"}
+        # If request headers are provided with auth info, use them directly
+        if request_headers:
+            # Check for API key auth from client
+            if "X-API-Key" in request_headers and request_headers["X-API-Key"]:
+                logger.info("Using API key from request headers")
+                return {
+                    "X-API-Key": request_headers["X-API-Key"],
+                    "X-User-ID": request_headers.get("X-User-ID", ""),
+                    "X-Device-ID": request_headers.get("X-Device-ID", ""),
+                    "X-Device-Name": request_headers.get("X-Device-Name", "MCP Agent"),
+                    "X-Device-Type": "mcp_agent"
+                }
+            
+            # Check for OAuth token in request headers
+            if "Authorization" in request_headers:
+                auth_header = request_headers["Authorization"]
+                if auth_header.startswith("Bearer "):
+                    oauth_token = auth_header[7:]
+                    # Validate and use OAuth token
+                    if await self.validate_oauth_token(oauth_token):
+                        return {"Authorization": f"Bearer {oauth_token}"}
         
-        # Fall back to API key authentication
+        # Fall back to environment variables (for backward compatibility)
         if self.api_key:
+            logger.info("Using API key from environment variables")
             return {
                 "X-API-Key": self.api_key,
                 "X-Device-ID": self.device_id,

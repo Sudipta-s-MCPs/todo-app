@@ -1,39 +1,39 @@
 # Smart-ToDo - Complete Docker Deployment Information
 
 ## Build Summary
-- **Build Date**: 2025-07-04 17:55:09 UTC
-- **Tag**: v1.0.0
+- **Build Date**: 2025-07-05 18:29:23 UTC
+- **Tag**: latest
 - **Platforms**: linux/amd64,linux/arm64
 - **Registry**: GitHub Container Registry (ghcr.io)
 
 ## Images Built
 
 ### Backend API
-- **Image**: `ghcr.io/sudipta-s-mcps/smart-todo-backend:v1.0.0`
+- **Image**: `ghcr.io/sudipta-s-mcps/smart-todo-backend:latest`
 - **Port**: 8000
 - **Purpose**: FastAPI backend with MCP integration
 
 ### Frontend PWA
-- **Image**: `ghcr.io/sudipta-s-mcps/smart-todo-frontend:v1.0.0`
+- **Image**: `ghcr.io/sudipta-s-mcps/smart-todo-frontend:latest`
 - **Port**: 80 (Nginx)
 - **Purpose**: React PWA for users
 
 ### Admin Panel
-- **Image**: `ghcr.io/sudipta-s-mcps/smart-todo-admin:v1.0.0`
+- **Image**: `ghcr.io/sudipta-s-mcps/smart-todo-admin:latest`
 - **Port**: 3000
 - **Purpose**: Admin interface for system management
 
 ### MCP Server
-- **Image**: `ghcr.io/sudipta-s-mcps/smart-todo-mcp:v1.0.0`
+- **Image**: `ghcr.io/sudipta-s-mcps/smart-todo-mcp:latest`
 - **Port**: 5485
 - **Purpose**: MCP server for Claude Desktop integration
 
 ## Pull All Images
 ```bash
-docker pull ghcr.io/sudipta-s-mcps/smart-todo-backend:v1.0.0
-docker pull ghcr.io/sudipta-s-mcps/smart-todo-frontend:v1.0.0
-docker pull ghcr.io/sudipta-s-mcps/smart-todo-admin:v1.0.0
-docker pull ghcr.io/sudipta-s-mcps/smart-todo-mcp:v1.0.0
+docker pull ghcr.io/sudipta-s-mcps/smart-todo-backend:latest
+docker pull ghcr.io/sudipta-s-mcps/smart-todo-frontend:latest
+docker pull ghcr.io/sudipta-s-mcps/smart-todo-admin:latest
+docker pull ghcr.io/sudipta-s-mcps/smart-todo-mcp:latest
 ```
 
 ## Complete Portainer Stack
@@ -41,7 +41,7 @@ docker pull ghcr.io/sudipta-s-mcps/smart-todo-mcp:v1.0.0
 version: '3.8'
 services:
   backend:
-    image: ghcr.io/sudipta-s-mcps/smart-todo-backend:v1.0.0
+    image: ghcr.io/sudipta-s-mcps/smart-todo-backend:latest
     ports:
       - "5482:8000"
     environment:
@@ -52,7 +52,7 @@ services:
       - smart-todo-network
     
   frontend:
-    image: ghcr.io/sudipta-s-mcps/smart-todo-frontend:v1.0.0
+    image: ghcr.io/sudipta-s-mcps/smart-todo-frontend:latest
     ports:
       - "5484:80"
     environment:
@@ -63,7 +63,7 @@ services:
       - backend
     
   admin-panel:
-    image: ghcr.io/sudipta-s-mcps/smart-todo-admin:v1.0.0
+    image: ghcr.io/sudipta-s-mcps/smart-todo-admin:latest
     ports:
       - "5483:3000"
     environment:
@@ -74,7 +74,7 @@ services:
       - backend
     
   mcp-server:
-    image: ghcr.io/sudipta-s-mcps/smart-todo-mcp:v1.0.0
+    image: ghcr.io/sudipta-s-mcps/smart-todo-mcp:latest
     ports:
       - "5485:5485"
     environment:

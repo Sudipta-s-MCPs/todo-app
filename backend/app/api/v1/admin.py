@@ -24,6 +24,7 @@ from app.services.email_service import email_service
 import hashlib
 import os
 import secrets
+import pathlib
 
 router = APIRouter()
 
@@ -723,7 +724,10 @@ async def register_mcp_agent_admin(
     
     # Generate configurations for different MCP clients
     mcp_endpoint = os.getenv("MCP_ENDPOINT", "http://localhost:5485/mcp")
-    
+    # Compute absolute path to client_wrapper.py
+    project_root = pathlib.Path(__file__).parent.parent.parent.resolve()
+    client_wrapper_path = str(project_root / "mcp_server" / "client_wrapper.py")
+
     configurations = {
         "claude_code": {
             "format": "command",
@@ -738,26 +742,25 @@ async def register_mcp_agent_admin(
             }
         },
         "claude_desktop": {
-            "format": "remote_integration",
+            "format": "json",
             "content": {
-                "method": "Native Remote MCP Support",
-                "endpoint": mcp_endpoint,
-                "authentication": {
-                    "type": "headers",
-                    "headers": {
-                        "X-API-Key": api_key_value,
-                        "X-Device-ID": agent_identifier,
-                        "X-Device-Name": agent_name,
-                        "X-User-ID": str(user.id)
+                "mcpServers": {
+                    "smart-todo": {
+                        "command": "/usr/local/bin/python3",
+                        "args": [client_wrapper_path],
+                        "env": {
+                            "TODO_API_KEY": api_key_value,
+                            "TODO_USER_ID": str(user.id),
+                            "TODO_DEVICE_ID": agent_identifier,
+                            "TODO_DEVICE_NAME": agent_name
+                        }
                     }
                 },
                 "instructions": [
-                    "Claude Desktop now supports remote MCP servers natively!",
                     "1. Open Claude Desktop",
-                    "2. Go to Settings > Integrations",
-                    "3. Add a new remote MCP server with the endpoint URL",
-                    "4. Configure authentication headers as provided above",
-                    "Note: This feature is available for Pro, Max, Teams, and Enterprise users"
+                    "2. Go to Settings > Developer > Edit Config",
+                    "3. Paste the configuration below into your claude_desktop_config.json file.",
+                    "4. Save and restart Claude Desktop."
                 ]
             }
         },

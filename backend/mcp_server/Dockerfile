@@ -8,17 +8,18 @@ WORKDIR /app
 RUN apk add --no-cache curl && \
     rm -rf /var/cache/apk/*
 
-# Copy minimal requirements and install
-COPY ../requirements-mcp.txt .
-RUN pip install --no-cache-dir -r requirements-mcp.txt && \
-    rm requirements-mcp.txt
+# Copy consolidated requirements and install only MCP dependencies
+COPY ../requirements.txt .
+RUN pip install --no-cache-dir fastmcp==2.9.2 httpx>=0.28.1 pydantic>=2.5.0 pydantic-settings>=2.1.0 python-dotenv==1.1.0 python-dateutil==2.9.0 && \
+    rm requirements.txt
 
 # Create non-root user
 RUN adduser -D -u 1000 mcp
 
 # Copy only MCP server code (no full backend)
 COPY --chown=mcp:mcp mcp_server/ ./mcp_server/
-COPY --chown=mcp:mcp __init__.py .
+# Create empty __init__.py if needed
+RUN touch __init__.py && chown mcp:mcp __init__.py
 
 # Switch to non-root user
 USER mcp

@@ -1,23 +1,16 @@
 """
-Smart Task Parser for MCP using AI
+Smart Task Parser for MCP - Self-contained version
 Created: 2025-01-02 06:30:00 PST
+Updated: 2025-07-05 - Made self-contained without backend dependencies
 """
 
-import os
-import sys
 import re
+import logging
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta
 from dateutil import parser as date_parser
-import asyncio
 
-# Add parent directory to Python path for imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from app.services.ai_service import get_ai_service, TaskAnalysis
-from app.utils.logging import get_logger
-
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class SmartTaskParser:
@@ -30,29 +23,125 @@ class SmartTaskParser:
         "low": ["low priority", "when possible", "eventually", "someday", "minor"]
     }
     
-    # Common date patterns
-    DATE_PATTERNS = {
-        r"\b(today)\b": lambda: datetime.now().date(),
-        r"\b(tomorrow)\b": lambda: (datetime.now() + timedelta(days=1)).date(),
-        r"\b(next week)\b": lambda: (datetime.now() + timedelta(weeks=1)).date(),
-        r"\b(next month)\b": lambda: (datetime.now() + timedelta(days=30)).date(),
-        r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b": None,  # Handled separately
-        r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b": None,  # Date formats
-        r"\b(\d{1,2}(st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*)\b": None
+    # Relative date patterns
+    RELATIVE_DATE_PATTERNS = {
+        "today": 0,
+        "tomorrow": 1,
+        "day after tomorrow": 2,
+        "next week": 7,
+        "in a week": 7,
+        "next month": 30,
+        "in a month": 30,
     }
     
-    # Workspace/project indicators
-    WORKSPACE_INDICATORS = {
-        "work": ["office", "meeting", "client", "project", "deadline", "presentation", "report"],
-        "personal": ["home", "family", "personal", "doctor", "shopping", "errands"],
-        "development": ["code", "bug", "feature", "deploy", "test", "review", "pr", "commit"]
+    # Workspace keywords
+    WORKSPACE_KEYWORDS = {
+        "personal": ["personal", "private", "home", "self"],
+        "work": ["work", "office", "job", "professional", "business"],
+        "shopping": ["shopping", "buy", "purchase", "groceries"],
+        "health": ["health", "doctor", "medical", "fitness", "gym", "exercise"],
+        "finance": ["finance", "money", "payment", "bill", "budget"],
+        "learning": ["learn", "study", "course", "education", "training"],
+        "project": ["project", "development", "build", "create"],
     }
     
     def __init__(self):
-        self.ai_service = get_ai_service()
+        """Initialize the parser"""
+        pass
     
-    def extract_priority(self, text: str) -> Optional[str]:
-        """Extract priority from text using keywords"""
+    def parse_task(self, text: str) -> Dict[str, Any]:
+        """
+        Parse natural language text into task components
+        
+        This is a simplified version that doesn't require AI service
+        """
+        try:
+            # Clean the input text
+            text = text.strip()
+            
+            # Initialize result
+            result = {
+                "title": text,
+                "description": "",
+                "priority": "medium",
+                "due_date": None,
+                "workspace": None,
+                "list_name": None,
+                "tags": [],
+                "assigned_to": []
+            }
+            
+            # Extract priority
+            priority = self._extract_priority(text)
+            if priority:
+                result["priority"] = priority
+            
+            # Extract due date
+            due_date, cleaned_text = self._extract_due_date(text)
+            if due_date:
+                result["due_date"] = due_date
+                result["title"] = cleaned_text
+            
+            # Extract workspace
+            workspace = self._extract_workspace(text)
+            if workspace:
+                result["workspace"] = workspace
+            
+            # Extract list name (anything after "in" or "to")
+            list_match = re.search(r'\b(?:in|to)\s+(\w+(?:\s+\w+)?)\s*(?:list)?', text, re.IGNORECASE)
+            if list_match:
+                result["list_name"] = list_match.group(1).strip()
+            
+            # Extract tags (words starting with # or @)
+            tags = re.findall(r'[#@](\w+)', text)
+            if tags:
+                result["tags"] = tags
+            
+            # Extract assigned users (email patterns)
+            emails = re.findall(r'\b[\w._%+-]+@[\w.-]+\.[A-Z|a-z]{2,}\b', text)
+            if emails:
+                result["assigned_to"] = emails
+            
+            # Clean up title by removing extracted components
+            title = result["title"]
+            # Remove priority keywords
+            for priority_level, keywords in self.PRIORITY_KEYWORDS.items():
+                for keyword in keywords:
+                    title = re.sub(rf'\b{keyword}\b', '', title, flags=re.IGNORECASE)
+            
+            # Remove tags
+            title = re.sub(r'[#@]\w+', '', title)
+            
+            # Remove emails
+            for email in emails:
+                title = title.replace(email, '')
+            
+            # Remove list references
+            title = re.sub(r'\b(?:in|to)\s+\w+(?:\s+\w+)?\s*(?:list)?', '', title, flags=re.IGNORECASE)
+            
+            # Clean up multiple spaces
+            title = re.sub(r'\s+', ' ', title).strip()
+            result["title"] = title
+            
+            logger.info(f"Parsed task: {result}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error parsing task: {str(e)}")
+            # Return basic result on error
+            return {
+                "title": text,
+                "description": "",
+                "priority": "medium",
+                "due_date": None,
+                "workspace": None,
+                "list_name": None,
+                "tags": [],
+                "assigned_to": []
+            }
+    
+    def _extract_priority(self, text: str) -> Optional[str]:
+        """Extract priority from text"""
         text_lower = text.lower()
         
         for priority, keywords in self.PRIORITY_KEYWORDS.items():
@@ -62,208 +151,57 @@ class SmartTaskParser:
         
         return None
     
-    def extract_due_date(self, text: str) -> Optional[datetime]:
-        """Extract due date from natural language"""
-        text_lower = text.lower()
-        
-        # Check for relative dates
-        for pattern, date_func in self.DATE_PATTERNS.items():
-            match = re.search(pattern, text_lower)
-            if match:
-                if date_func:
-                    return date_func()
-                else:
-                    # Try to parse the matched text
-                    try:
-                        return date_parser.parse(match.group(1), fuzzy=True).date()
-                    except:
-                        continue
-        
-        # Check for time expressions like "in 3 days", "in 2 weeks"
-        time_match = re.search(r"in (\d+) (day|week|month)s?", text_lower)
-        if time_match:
-            amount = int(time_match.group(1))
-            unit = time_match.group(2)
+    def _extract_due_date(self, text: str) -> Tuple[Optional[str], str]:
+        """Extract due date from text and return cleaned text"""
+        try:
+            # Check for relative date patterns
+            text_lower = text.lower()
+            for pattern, days in self.RELATIVE_DATE_PATTERNS.items():
+                if pattern in text_lower:
+                    due_date = datetime.now() + timedelta(days=days)
+                    # Remove the pattern from text
+                    cleaned_text = re.sub(rf'\b{pattern}\b', '', text, flags=re.IGNORECASE)
+                    return due_date.isoformat(), cleaned_text.strip()
             
-            if unit == "day":
-                return (datetime.now() + timedelta(days=amount)).date()
-            elif unit == "week":
-                return (datetime.now() + timedelta(weeks=amount)).date()
-            elif unit == "month":
-                return (datetime.now() + timedelta(days=amount * 30)).date()
+            # Check for "by" or "due" followed by a date
+            date_match = re.search(r'(?:by|due|on)\s+(.+?)(?:\s|$)', text, re.IGNORECASE)
+            if date_match:
+                date_str = date_match.group(1)
+                try:
+                    # Try to parse the date
+                    parsed_date = date_parser.parse(date_str, fuzzy=True)
+                    # Remove the date portion from text
+                    cleaned_text = text[:date_match.start()] + text[date_match.end():]
+                    return parsed_date.isoformat(), cleaned_text.strip()
+                except:
+                    pass
+            
+            # Check for day names
+            days_of_week = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+            for day in days_of_week:
+                if f"next {day}" in text_lower:
+                    # Calculate days until next occurrence of this day
+                    today = datetime.now()
+                    target_day = days_of_week.index(day)
+                    days_ahead = (target_day - today.weekday() + 7) % 7
+                    if days_ahead == 0:  # If it's the same day, assume next week
+                        days_ahead = 7
+                    due_date = today + timedelta(days=days_ahead)
+                    cleaned_text = re.sub(rf'\bnext {day}\b', '', text, flags=re.IGNORECASE)
+                    return due_date.isoformat(), cleaned_text.strip()
+            
+        except Exception as e:
+            logger.error(f"Error extracting due date: {str(e)}")
         
-        return None
+        return None, text
     
-    def suggest_workspace(self, text: str, available_workspaces: List[str]) -> Optional[str]:
-        """Suggest best matching workspace based on text content"""
+    def _extract_workspace(self, text: str) -> Optional[str]:
+        """Extract workspace from text based on keywords"""
         text_lower = text.lower()
         
-        # First check if any workspace name is mentioned directly
-        for workspace in available_workspaces:
-            if workspace.lower() in text_lower:
-                return workspace
-        
-        # Then check indicators
-        scores = {}
-        for category, indicators in self.WORKSPACE_INDICATORS.items():
-            score = sum(1 for indicator in indicators if indicator in text_lower)
-            if score > 0:
-                scores[category] = score
-        
-        # Find best matching workspace
-        if scores:
-            best_category = max(scores, key=scores.get)
-            
-            # Try to match category with workspace names
-            for workspace in available_workspaces:
-                if best_category.lower() in workspace.lower():
+        for workspace, keywords in self.WORKSPACE_KEYWORDS.items():
+            for keyword in keywords:
+                if keyword in text_lower:
                     return workspace
         
         return None
-    
-    def extract_subtasks(self, text: str) -> List[str]:
-        """Extract potential subtasks from text"""
-        subtasks = []
-        
-        # Look for numbered lists
-        numbered_pattern = r"\d+[.)\s]+([^\n]+)"
-        for match in re.finditer(numbered_pattern, text):
-            subtasks.append(match.group(1).strip())
-        
-        # Look for bullet points
-        bullet_pattern = r"[-*•]\s+([^\n]+)"
-        for match in re.finditer(bullet_pattern, text):
-            subtasks.append(match.group(1).strip())
-        
-        # Look for "and" separated items (if no other subtasks found)
-        if not subtasks and " and " in text.lower():
-            # Simple split on "and" - could be improved
-            parts = re.split(r"\s+and\s+", text, flags=re.IGNORECASE)
-            if len(parts) > 1 and len(parts) <= 5:  # Reasonable number of parts
-                subtasks = [part.strip() for part in parts]
-        
-        return subtasks
-    
-    def extract_mentions(self, text: str) -> List[str]:
-        """Extract @mentions from text"""
-        mentions = re.findall(r"@(\w+)", text)
-        return list(set(mentions))  # Remove duplicates
-    
-    def extract_tags(self, text: str) -> List[str]:
-        """Extract #tags from text"""
-        tags = re.findall(r"#(\w+)", text)
-        return list(set(tags))
-    
-    async def parse_task(
-        self,
-        natural_text: str,
-        workspaces: List[Dict[str, str]],
-        lists: List[Dict[str, str]],
-        user_id: str
-    ) -> Dict[str, Any]:
-        """
-        Parse natural language task into structured format
-        Returns parsed task data with AI enhancement
-        """
-        
-        # First, try AI parsing
-        try:
-            ai_analysis = await self.ai_service.parse_natural_task(
-                natural_text,
-                workspaces,
-                lists,
-                user_id
-            )
-            
-            # Use AI results as base
-            parsed = {
-                "title": ai_analysis.suggested_title or natural_text[:100],
-                "description": natural_text if len(natural_text) > 100 else None,
-                "workspace": ai_analysis.suggested_workspace,
-                "list": ai_analysis.suggested_list,
-                "priority": ai_analysis.suggested_priority,
-                "due_date": ai_analysis.suggested_due_date,
-                "confidence": ai_analysis.confidence,
-                "ai_reasoning": ai_analysis.reasoning
-            }
-            
-            # Add extracted entities if available
-            if ai_analysis.extracted_entities:
-                parsed["entities"] = ai_analysis.extracted_entities
-            
-        except Exception as e:
-            logger.warning(f"AI parsing failed, using fallback: {str(e)}")
-            
-            # Fallback to rule-based parsing
-            parsed = {
-                "title": natural_text[:100],  # First 100 chars as title
-                "description": natural_text if len(natural_text) > 100 else None,
-                "workspace": None,
-                "list": None,
-                "priority": None,
-                "due_date": None,
-                "confidence": 0.5,
-                "ai_reasoning": "Using rule-based parsing"
-            }
-        
-        # Enhance with rule-based extraction
-        # This can override or complement AI results
-        
-        # Extract priority if not set by AI
-        if not parsed["priority"]:
-            parsed["priority"] = self.extract_priority(natural_text) or "medium"
-        
-        # Extract due date if not set by AI
-        if not parsed["due_date"]:
-            due_date = self.extract_due_date(natural_text)
-            if due_date:
-                parsed["due_date"] = due_date.isoformat()
-        
-        # Suggest workspace if not set by AI
-        if not parsed["workspace"] and workspaces:
-            workspace_names = [ws["name"] for ws in workspaces]
-            suggested = self.suggest_workspace(natural_text, workspace_names)
-            if suggested:
-                parsed["workspace"] = suggested
-            elif workspace_names:
-                parsed["workspace"] = workspace_names[0]  # Default to first
-        
-        # Extract additional metadata
-        parsed["subtasks"] = self.extract_subtasks(natural_text)
-        parsed["mentions"] = self.extract_mentions(natural_text)
-        parsed["tags"] = self.extract_tags(natural_text)
-        
-        # Clean up the title (remove dates, tags, mentions if they're at the end)
-        if parsed.get("title"):
-            title = parsed["title"]
-            # Remove trailing date patterns
-            title = re.sub(r"\s+(today|tomorrow|next \w+|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})$", "", title, flags=re.IGNORECASE)
-            # Remove trailing tags and mentions
-            title = re.sub(r"\s+[@#]\w+\s*$", "", title)
-            parsed["title"] = title.strip()
-        
-        return parsed
-    
-    def generate_task_summary(self, parsed_task: Dict[str, Any]) -> str:
-        """Generate a human-readable summary of the parsed task"""
-        parts = [f"Task: {parsed_task['title']}"]
-        
-        if parsed_task.get('workspace'):
-            parts.append(f"Workspace: {parsed_task['workspace']}")
-        
-        if parsed_task.get('list'):
-            parts.append(f"List: {parsed_task['list']}")
-        
-        if parsed_task.get('priority') and parsed_task['priority'] != 'medium':
-            parts.append(f"Priority: {parsed_task['priority']}")
-        
-        if parsed_task.get('due_date'):
-            parts.append(f"Due: {parsed_task['due_date']}")
-        
-        if parsed_task.get('subtasks'):
-            parts.append(f"Subtasks: {len(parsed_task['subtasks'])}")
-        
-        if parsed_task.get('mentions'):
-            parts.append(f"Mentions: {', '.join(parsed_task['mentions'])}")
-        
-        return " | ".join(parts)

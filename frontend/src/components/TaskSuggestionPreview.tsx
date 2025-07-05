@@ -104,18 +104,22 @@ export default function TaskSuggestionPreview({
   const handleApprove = async () => {
     try {
       setIsCreating(true);
-      
+      // Defensive normalization for priority
+      const validPriorities = ['low', 'medium', 'high'];
+      let priority = editedTask.priority;
+      if (!validPriorities.includes(priority)) {
+        priority = 'medium';
+      }
       // Create the task
       await taskService.createTask({
         title: editedTask.title,
         description: editedTask.description || undefined,
         workspace_id: editedTask.workspace_id,
         list_id: editedTask.list_id,
-        priority: editedTask.priority,
+        priority,
         due_date: dueDate?.toISOString().split('T')[0],
         tags: editedTask.tags,
       });
-      
       enqueueSnackbar('Task created successfully', { variant: 'success' });
       onApprove?.();
     } catch (error: any) {

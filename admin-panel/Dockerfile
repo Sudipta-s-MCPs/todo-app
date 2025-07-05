@@ -64,7 +64,9 @@ RUN adduser -D -s /bin/false -u 1001 nginx-user && \
     chown -R nginx-user:nginx-user /usr/share/nginx/html && \
     chown -R nginx-user:nginx-user /var/cache/nginx && \
     chown -R nginx-user:nginx-user /var/log/nginx && \
-    chown -R nginx-user:nginx-user /etc/nginx/conf.d
+    chown -R nginx-user:nginx-user /etc/nginx/conf.d && \
+    touch /run/nginx.pid && \
+    chown nginx-user:nginx-user /run/nginx.pid
 
 # Switch to non-root user
 USER nginx-user

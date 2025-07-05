@@ -95,15 +95,23 @@ class SmartTodoMCPServer:
             # Prepare the HTTP request
             data = json.dumps(request).encode('utf-8')
             
+            # Log authentication credentials for debugging
+            api_key = os.environ.get('TODO_API_KEY', '')
+            user_id = os.environ.get('TODO_USER_ID', '')
+            device_id = os.environ.get('TODO_DEVICE_ID', '')
+            device_name = os.environ.get('TODO_DEVICE_NAME', 'Claude Desktop')
+            
+            logger.info(f"Forwarding request with auth - API Key: {'***' + api_key[-4:] if api_key else 'MISSING'}, User ID: {user_id[:8] + '...' if user_id else 'MISSING'}")
+            
             headers = {
                 'Content-Type': 'application/json',
                 'Accept': 'application/json, text/event-stream',
                 'Content-Length': str(len(data)),
                 # Pass authentication credentials from Claude Desktop
-                'X-API-Key': os.environ.get('TODO_API_KEY', ''),
-                'X-User-ID': os.environ.get('TODO_USER_ID', ''),
-                'X-Device-ID': os.environ.get('TODO_DEVICE_ID', ''),
-                'X-Device-Name': os.environ.get('TODO_DEVICE_NAME', 'Claude Desktop')
+                'X-API-Key': api_key,
+                'X-User-ID': user_id,
+                'X-Device-ID': device_id,
+                'X-Device-Name': device_name
             }
             
             # Add session ID if we have one (for requests after initialization)

@@ -33,6 +33,7 @@ interface TaskCardProps {
   onDelete: (task: Task) => void;
   onToggleStatus: (task: Task) => void;
   onSelect?: (task: Task, selected: boolean) => void;
+  onView?: (task: Task) => void;
   selected?: boolean;
 }
 
@@ -42,6 +43,7 @@ export default function TaskCard({
   onDelete,
   onToggleStatus,
   onSelect,
+  onView,
   selected = false,
 }: TaskCardProps) {
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
@@ -105,15 +107,26 @@ export default function TaskCard({
     <Card
       sx={{
         mb: 1,
-        opacity: task.status === 'completed' ? 0.7 : 1,
+        opacity: task.status === 'completed' ? 0.7 : task.status === 'archived' ? 0.5 : 1,
         border: selected ? '2px solid' : '1px solid',
         borderColor: selected ? 'primary.main' : 'divider',
-        cursor: 'pointer',
+        cursor: task.status === 'archived' ? 'not-allowed' : 'pointer',
+        backgroundColor: task.status === 'archived' ? 'action.disabledBackground' : 'background.paper',
+        filter: task.status === 'archived' ? 'grayscale(0.7)' : 'none',
         '&:hover': {
-          boxShadow: 2,
+          boxShadow: task.status === 'archived' ? 1 : 2,
         },
       }}
-      onClick={() => onSelect?.(task, !selected)}
+      onClick={(e) => {
+        // If clicking with Ctrl/Cmd key, select the task
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+          task.status !== 'archived' && onSelect?.(task, !selected);
+        } else if (onView) {
+          // Otherwise, view the task details
+          onView(task);
+        }
+      }}
     >
       <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
         <Box display="flex" alignItems="flex-start" gap={1}>
@@ -121,6 +134,7 @@ export default function TaskCard({
             size="small"
             onClick={handleToggle}
             sx={{ mt: -0.5 }}
+            disabled={task.status === 'archived'}
           >
             {getStatusIcon()}
           </IconButton>
@@ -129,8 +143,9 @@ export default function TaskCard({
             <Typography
               variant="body1"
               sx={{
-                textDecoration: task.status === 'completed' ? 'line-through' : 'none',
+                textDecoration: (task.status === 'completed' || task.status === 'archived') ? 'line-through' : 'none',
                 mb: 0.5,
+                color: task.status === 'archived' ? 'text.disabled' : 'text.primary',
               }}
             >
               {task.title}
@@ -139,7 +154,7 @@ export default function TaskCard({
             {task.description && (
               <Typography 
                 variant="body2" 
-                color="text.secondary" 
+                color={task.status === 'archived' ? 'text.disabled' : 'text.secondary'} 
                 sx={{ 
                   mb: 1,
                   overflow: 'hidden',
@@ -147,6 +162,7 @@ export default function TaskCard({
                   display: '-webkit-box',
                   WebkitLineClamp: 2,
                   WebkitBoxOrient: 'vertical',
+                  textDecoration: task.status === 'archived' ? 'line-through' : 'none',
                 }}
               >
                 {task.description}

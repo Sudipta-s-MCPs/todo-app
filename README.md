@@ -230,7 +230,7 @@ Smart-ToDo is an advanced task management application with multi-device support,
 - **🔐 Multi-Device Support**: Track which device and method created/modified each task
 - **🤖 AI Agent Integration**: Full MCP protocol support for AI assistants with task management tools
 - **🧠 AI-Powered Features**: 
-  - Semantic duplicate detection using Groq LLM (Llama 3.1)
+  - Semantic duplicate detection using remote LLMs (HuggingFace, Groq, Gemini)
   - Natural language task creation with smart parsing
   - Automatic workspace/list categorization
   - Intelligent task suggestions and merging
@@ -241,6 +241,7 @@ Smart-ToDo is an advanced task management application with multi-device support,
 - **📱 API-First Design**: RESTful API with OpenAPI documentation and multiple auth methods
 - **🐳 Production-Ready**: Fully containerized with health checks and monitoring support
 - **💰 Cost-Effective AI**: Optimized to stay under $2/month even with 10+ active users
+- **🪶 Lightweight Architecture**: No local ML models - all AI via remote APIs (perfect for NAS deployment)
 
 ## Documentation Index
 

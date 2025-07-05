@@ -559,6 +559,12 @@ Provide suggestions in JSON format:
         # Use parse_natural_task for task extraction
         analysis = await self.parse_natural_task(text, workspaces, lists, user_id or "system")
         
+        # Normalize priority
+        valid_priorities = {"low", "medium", "high"}
+        priority = (analysis.suggested_priority or '').lower()
+        if priority not in valid_priorities:
+            priority = 'medium'
+
         # Check for duplicate if existing tasks provided
         is_duplicate = False
         duplicate_suggestions = []
@@ -584,7 +590,7 @@ Provide suggestions in JSON format:
                 "description": None,
                 "workspace_id": analysis.suggested_workspace,
                 "list_id": analysis.suggested_list,
-                "priority": analysis.suggested_priority or "medium",
+                "priority": priority,
                 "due_date": analysis.suggested_due_date
             } if analysis.suggested_title else None,
             "is_duplicate": is_duplicate,

@@ -857,7 +857,7 @@ async def get_list_tasks(
     current_user: User = Depends(get_current_user),
     limit: int = Query(50, le=100),
     offset: int = Query(0, ge=0),
-    status: Optional[List[TaskStatus]] = Query(None),
+    status: Optional[List[str]] = Query(None),  # Accept as list of str for robust parsing
     priority: Optional[List[TaskPriority]] = Query(None),
     db: AsyncSession = Depends(get_db)
 ):
@@ -907,7 +907,17 @@ async def get_list_tasks(
     
     # Apply filters
     if status:
-        query = query.where(Task.status.in_(status))
+        # Accept both status=value and status[]=value
+        # Convert to TaskStatus enum if possible, fallback to string
+        from app.models.task import TaskStatus
+        parsed_statuses = []
+        for s in status:
+            try:
+                parsed_statuses.append(TaskStatus(s))
+            except Exception:
+                # fallback to string
+                parsed_statuses.append(s)
+        query = query.where(Task.status.in_(parsed_statuses))
     
     if priority:
         query = query.where(Task.priority.in_(priority))

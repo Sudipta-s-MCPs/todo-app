@@ -222,7 +222,13 @@ export default function Lists() {
       <Grid container spacing={3}>
         {lists?.map((list) => (
           <Grid item xs={12} sm={6} md={4} key={list.id}>
-            <Card>
+            <Card
+              sx={{ cursor: 'pointer', transition: 'box-shadow 0.2s', '&:hover': { boxShadow: 4 } }}
+              onClick={() => navigate(`/workspaces/${workspaceId}/lists/${list.id}/tasks`)}
+              tabIndex={0}
+              role="button"
+              aria-label={`View tasks in ${list.name}`}
+            >
               <CardContent>
                 <Box display="flex" alignItems="flex-start" justifyContent="space-between">
                   <Box>
@@ -238,7 +244,7 @@ export default function Lists() {
                   </Box>
                   <IconButton
                     size="small"
-                    onClick={(e) => handleMenuClick(e, list)}
+                    onClick={(e) => { e.stopPropagation(); handleMenuClick(e, list); }}
                   >
                     <MoreIcon />
                   </IconButton>
@@ -247,13 +253,13 @@ export default function Lists() {
               <CardActions>
                 <Button
                   size="small"
-                  onClick={() => navigate(`/workspaces/${workspaceId}/lists/${list.id}/tasks`)}
+                  onClick={(e) => { e.stopPropagation(); navigate(`/workspaces/${workspaceId}/lists/${list.id}/tasks`); }}
                 >
                   View Tasks
                 </Button>
                 <Button
                   size="small"
-                  onClick={() => handleOpenDialog(list)}
+                  onClick={(e) => { e.stopPropagation(); handleOpenDialog(list); }}
                   disabled={list.is_default}
                 >
                   Edit

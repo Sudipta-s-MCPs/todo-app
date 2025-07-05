@@ -307,6 +307,82 @@ class HuggingFaceProvider(AIProvider):
             logger.warning(f"HuggingFace availability check failed: {str(e)}")
             return False
     
+    async def generate_embedding(self, text: str) -> List[float]:
+        """Generate embedding for a single text using HuggingFace Feature Extraction API"""
+        if not self._initialized or not self.client:
+            raise AIProviderError("HuggingFace provider not initialized")
+        
+        try:
+            # Use HuggingFace's feature extraction endpoint for embeddings
+            embedding_model = "sentence-transformers/all-MiniLM-L6-v2"
+            
+            # Create a timeout for embedding generation
+            embedding = await asyncio.wait_for(
+                asyncio.create_task(
+                    asyncio.to_thread(
+                        self.client.feature_extraction,
+                        text,
+                        model=embedding_model
+                    )
+                ),
+                timeout=10.0  # 10 second timeout
+            )
+            
+            # The response is already a list of floats
+            return embedding
+            
+        except asyncio.TimeoutError:
+            logger.warning("HuggingFace embedding generation timed out")
+            raise AIProviderUnavailableError("HuggingFace embedding generation timed out")
+        except Exception as e:
+            logger.error(f"HuggingFace embedding generation failed: {str(e)}")
+            raise AIProviderError(f"Failed to generate embedding: {str(e)}")
+    
+    async def generate_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
+        """Generate embeddings for multiple texts efficiently using HuggingFace API"""
+        if not self._initialized or not self.client:
+            raise AIProviderError("HuggingFace provider not initialized")
+        
+        try:
+            # Use HuggingFace's feature extraction endpoint for embeddings
+            embedding_model = "sentence-transformers/all-MiniLM-L6-v2"
+            
+            # Process in batches to avoid API limits (max 10 texts per batch)
+            batch_size = 10
+            all_embeddings = []
+            
+            for i in range(0, len(texts), batch_size):
+                batch = texts[i:i + batch_size]
+                
+                # Generate embeddings for this batch
+                batch_embeddings = await asyncio.wait_for(
+                    asyncio.create_task(
+                        asyncio.to_thread(
+                            self.client.feature_extraction,
+                            batch,
+                            model=embedding_model
+                        )
+                    ),
+                    timeout=15.0  # 15 second timeout per batch
+                )
+                
+                # Handle both single and batch responses
+                if isinstance(batch_embeddings[0], list):
+                    # Batch response
+                    all_embeddings.extend(batch_embeddings)
+                else:
+                    # Single response (shouldn't happen with batch, but handle it)
+                    all_embeddings.append(batch_embeddings)
+            
+            return all_embeddings
+            
+        except asyncio.TimeoutError:
+            logger.warning("HuggingFace batch embedding generation timed out")
+            raise AIProviderUnavailableError("HuggingFace batch embedding generation timed out")
+        except Exception as e:
+            logger.error(f"HuggingFace batch embedding generation failed: {str(e)}")
+            raise AIProviderError(f"Failed to generate batch embeddings: {str(e)}")
+    
     def get_priority(self) -> int:
         """Get provider priority - HuggingFace is highest priority (free with Pro)"""
         return 10  # Highest priority = lowest number

@@ -16,9 +16,11 @@ WORKDIR /app
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy production requirements only
-COPY requirements-prod.txt .
-RUN pip install --no-cache-dir -r requirements-prod.txt
+# Copy consolidated requirements
+COPY requirements.txt .
+# Create a filtered requirements file for production
+RUN grep -v -E "^(pytest|black|flake8|mypy|faker|rich|asyncio-mqtt)" requirements.txt | grep -v "^#" | grep -v "^$" > requirements-filtered.txt && \
+    pip install --no-cache-dir -r requirements-filtered.txt
 
 # Production stage - Ultra minimal
 FROM python:3.11-alpine
@@ -42,6 +44,7 @@ RUN adduser -D -u 1001 appuser
 COPY --chown=appuser:appuser app/ ./app/
 COPY --chown=appuser:appuser alembic/ ./alembic/
 COPY --chown=appuser:appuser scripts/ ./scripts/
+COPY --chown=appuser:appuser mcp_server/ ./mcp_server/
 COPY --chown=appuser:appuser alembic.ini .
 
 # Make startup script executable
@@ -58,4 +61,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 EXPOSE 8000
 
 # Run the application
-CMD ["./scripts/start.sh"]
+CMD ["sh", "./scripts/start.sh"]

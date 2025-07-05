@@ -12,6 +12,7 @@ from datetime import datetime
 from uuid import UUID
 import httpx
 from fastmcp import FastMCP, Context
+from fastmcp.server.dependencies import get_http_headers
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -28,11 +29,9 @@ mcp = FastMCP("Smart-ToDo MCP Server")
 # Configuration from environment
 API_ENDPOINT = os.environ.get("TODO_API_ENDPOINT", "http://localhost:8000/api/v1")
 
-# Log environment variables at startup
+# Log startup info
 logger.info(f"API Endpoint: {API_ENDPOINT}")
-logger.info(f"TODO_API_KEY present: {'TODO_API_KEY' in os.environ}")
-logger.info(f"TODO_USER_ID present: {'TODO_USER_ID' in os.environ}")
-logger.info(f"TODO_DEVICE_ID present: {'TODO_DEVICE_ID' in os.environ}")
+logger.info("Authentication must be provided by MCP clients via request headers")
 
 
 class TaskCreateRequest(BaseModel):
@@ -56,27 +55,35 @@ class TaskUpdateRequest(BaseModel):
 
 
 def get_http_client(ctx: Optional[Context] = None) -> httpx.AsyncClient:
-    """Get configured HTTP client with proper authentication"""
-    headers = {}
+    """Get configured HTTP client with proper authentication
     
-    # Use environment variables for authentication
-    # These are passed from Claude Desktop through docker-compose
-    api_key = os.environ.get("TODO_API_KEY", "")
-    if api_key:
-        headers = {
-            "X-API-Key": api_key,
-            "X-Device-ID": os.environ.get("TODO_DEVICE_ID", ""),
-            "X-Device-Name": os.environ.get("TODO_DEVICE_NAME", "MCP Agent"),
-            "X-User-ID": os.environ.get("TODO_USER_ID", ""),
-            "X-Device-Type": "mcp_agent"
-        }
-        logger.info(f"Using auth from environment: API Key ending in ...{api_key[-4:] if len(api_key) > 4 else 'XXXX'}")
-    else:
-        logger.warning("No TODO_API_KEY found in environment variables")
+    Authentication is extracted from HTTP request headers using FastMCP's built-in support.
+    This server does NOT use environment variables for authentication.
+    """
+    # Get headers from the current HTTP request using FastMCP
+    request_headers = get_http_headers()
+    
+    # Extract authentication headers
+    auth_headers = {}
+    for key, value in request_headers.items():
+        if key.lower() in ['x-api-key', 'x-device-id', 'x-device-name', 'x-user-id']:
+            # Normalize header names
+            normalized_key = 'X-' + '-'.join(word.capitalize() for word in key[2:].split('-'))
+            auth_headers[normalized_key] = value
+    
+    if not auth_headers.get('X-API-Key'):
+        logger.error("No X-API-Key found in request headers")
+        raise ValueError("Authentication required. MCP client must provide X-API-Key header.")
+    
+    # Add device type for MCP agents
+    auth_headers['X-Device-Type'] = 'mcp_agent'
+    
+    api_key = auth_headers.get("X-API-Key", "")
+    logger.debug(f"Using auth from HTTP headers: API Key ending in ...{api_key[-4:] if len(api_key) > 4 else 'XXXX'}")
     
     return httpx.AsyncClient(
         base_url=API_ENDPOINT,
-        headers=headers,
+        headers=auth_headers,
         timeout=30.0,
         follow_redirects=True  # Handle trailing slash redirects
     )

@@ -16,9 +16,8 @@ RUN pip install --no-cache-dir -r requirements-mcp.txt && \
 # Create non-root user
 RUN adduser -D -u 1000 mcp
 
-# Copy only MCP server code (no full backend)
-COPY --chown=mcp:mcp mcp_server/ ./mcp_server/
-COPY --chown=mcp:mcp __init__.py .
+# Copy only MCP server code
+COPY --chown=mcp:mcp ./ ./mcp_server/
 
 # Switch to non-root user
 USER mcp

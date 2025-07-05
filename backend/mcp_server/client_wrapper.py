@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """
-Smart-ToDo MCP Server - Stdio to HTTP Bridge
-Self-contained stdio MCP server that connects to Docker HTTP backend
-Compatible with Portainer deployment and system Python
-Created: 2025-07-04 14:45:00 PST
+Smart-ToDo MCP Server - Stdio to HTTPS Bridge
+Self-contained stdio MCP server that connects to remote HTTPS backend
+Updated: 2025-07-05 09:58:00 PST
 """
 
 import sys
 import json
 import os
-import subprocess
 import time
 import urllib.request
 import urllib.parse
@@ -28,64 +26,12 @@ logger = logging.getLogger(__name__)
 class SmartTodoMCPServer:
     """Self-contained stdio MCP server for Smart-ToDo"""
     
-    def __init__(self, server_url: str = "http://localhost:5485/mcp/"):
+    def __init__(self, server_url: str = "https://todo-mcp.sudiptadhara.in/mcp/"):
         self.server_url = server_url
         self.initialized = False
         self.session_id = None
-        logger.info("Starting Simple MCP Server for Smart-ToDo")
+        logger.info(f"Starting MCP client for remote server at {server_url}")
     
-    def check_docker_container(self) -> bool:
-        """Check if the MCP server container is running"""
-        try:
-            result = subprocess.run([
-                "docker", "ps", "--filter", "name=smart-todo-mcp-server", 
-                "--format", "{{.Status}}"
-            ], capture_output=True, text=True, timeout=10)
-            
-            return result.returncode == 0 and "Up" in result.stdout
-        except Exception as e:
-            logger.error(f"Error checking Docker container: {e}")
-            return False
-
-    def start_docker_container(self) -> bool:
-        """Start the MCP server container if not running"""
-        try:
-            # Get project root directory
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            project_root = os.path.dirname(os.path.dirname(script_dir))
-            
-            # Pass authentication credentials from Claude Desktop environment to Docker
-            env = os.environ.copy()
-            
-            # Log which auth credentials we're passing
-            if env.get('TODO_API_KEY'):
-                logger.info(f"Starting container with API key ending in ...{env['TODO_API_KEY'][-4:]}")
-            else:
-                logger.warning("No TODO_API_KEY in environment when starting container")
-            
-            logger.info("Starting Docker container with authentication credentials...")
-            result = subprocess.run([
-                "docker-compose", "-f", os.path.join(project_root, "docker-compose.yml"),
-                "up", "-d", "mcp-server"
-            ], capture_output=True, text=True, timeout=60, cwd=project_root, env=env)
-            
-            if result.returncode != 0:
-                logger.error(f"Failed to start Docker container: {result.stderr}")
-                return False
-            
-            # Wait for container to be ready
-            for i in range(10):
-                time.sleep(2)
-                if self.check_docker_container():
-                    logger.info("Docker container is running")
-                    return True
-                    
-            logger.error("Docker container failed to start properly")
-            return False
-            
-        except Exception as e:
-            logger.error(f"Error starting Docker container: {e}")
-            return False
 
     def forward_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """Forward a JSON-RPC request to the HTTP server"""
@@ -199,20 +145,8 @@ class SmartTodoMCPServer:
             }
 
     def ensure_server_ready(self) -> bool:
-        """Ensure the Docker MCP server is running and accessible"""
-        # Check if Docker is available
-        try:
-            subprocess.run(["docker", "--version"], capture_output=True, check=True, timeout=5)
-        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
-            logger.error("Docker is not available")
-            return False
-        
-        # Check if container is running
-        if not self.check_docker_container():
-            logger.info("MCP server container not running, starting it...")
-            if not self.start_docker_container():
-                logger.error("Failed to start MCP server container")
-                return False
+        """Ensure the remote MCP server is accessible"""
+        logger.info(f"Checking connectivity to remote MCP server at {self.server_url}")
         
         # Test connectivity with a simple request
         try:
@@ -239,14 +173,21 @@ class SmartTodoMCPServer:
             
             with urllib.request.urlopen(req, timeout=10) as response:
                 if response.getcode() == 200:
-                    logger.info("MCP server is accessible")
+                    logger.info("Remote MCP server is accessible")
                     return True
+                else:
+                    logger.error(f"Unexpected response code: {response.getcode()}")
+                    return False
                     
-        except Exception as e:
-            logger.error(f"Cannot connect to MCP server: {e}")
+        except urllib.error.HTTPError as e:
+            logger.error(f"HTTP error connecting to MCP server: {e.code} - {e.reason}")
             return False
-        
-        return False
+        except urllib.error.URLError as e:
+            logger.error(f"Cannot connect to MCP server at {self.server_url}: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error connecting to MCP server: {e}")
+            return False
 
     def run(self) -> int:
         """Main stdio loop"""

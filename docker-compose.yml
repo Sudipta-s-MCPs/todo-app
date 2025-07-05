@@ -47,7 +47,7 @@ services:
         VITE_API_URL: ${API_BASE_URL}/api/v1
     container_name: smart-todo-admin
     ports:
-      - "${ADMIN_PORT:-5483}:3000"
+      - "${ADMIN_PORT:-5483}:80"
     environment:
       - VITE_API_URL=${API_BASE_URL}/api/v1
     # volumes:
@@ -80,7 +80,7 @@ services:
   mcp-server:
     build:
       context: ./backend
-      dockerfile: Dockerfile
+      dockerfile: mcp_server/Dockerfile
     container_name: smart-todo-mcp-server
     ports:
       - "${MCP_PORT:-5485}:5485"

@@ -50,7 +50,7 @@ class MCPAuthManager:
         if request_headers:
             # Check for API key auth from client
             if "X-API-Key" in request_headers and request_headers["X-API-Key"]:
-                logger.info("Using API key from request headers")
+                logger.info(f"Using API key from request headers: {request_headers}")
                 return {
                     "X-API-Key": request_headers["X-API-Key"],
                     "X-User-ID": request_headers.get("X-User-ID", ""),
@@ -66,11 +66,12 @@ class MCPAuthManager:
                     oauth_token = auth_header[7:]
                     # Validate and use OAuth token
                     if await self.validate_oauth_token(oauth_token):
+                        logger.info(f"Using OAuth token from request headers: {request_headers}")
                         return {"Authorization": f"Bearer {oauth_token}"}
         
         # Fall back to environment variables (for backward compatibility)
         if self.api_key:
-            logger.info("Using API key from environment variables")
+            logger.info(f"Using API key from environment variables: {self.api_key[-4:]}")
             return {
                 "X-API-Key": self.api_key,
                 "X-Device-ID": self.device_id,
@@ -79,6 +80,7 @@ class MCPAuthManager:
             }
         
         # No authentication available
+        logger.error("No valid authentication credentials available in get_auth_headers")
         raise ValueError("No valid authentication credentials available")
     
     async def ensure_authenticated(self) -> Dict[str, str]:
@@ -196,5 +198,6 @@ class MCPAuthManager:
             }
 
 
-# Global instance
-auth_manager = MCPAuthManager()
+# Add a factory function
+def get_auth_manager():
+    return MCPAuthManager()

@@ -102,7 +102,6 @@ class SmartTodoMCPServer:
             device_name = os.environ.get('TODO_DEVICE_NAME', 'Claude Desktop')
             
             logger.info(f"Forwarding request with auth - API Key: {'***' + api_key[-4:] if api_key else 'MISSING'}, User ID: {user_id[:8] + '...' if user_id else 'MISSING'}")
-            
             headers = {
                 'Content-Type': 'application/json',
                 'Accept': 'application/json, text/event-stream',
@@ -113,6 +112,7 @@ class SmartTodoMCPServer:
                 'X-Device-ID': device_id,
                 'X-Device-Name': device_name
             }
+            logger.info(f"Outgoing headers: {headers}")
             
             # Add session ID if we have one (for requests after initialization)
             if self.session_id and request.get('method') != 'initialize':

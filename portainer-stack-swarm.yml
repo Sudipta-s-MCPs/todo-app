@@ -19,6 +19,7 @@ services:
       - ADMIN_USERS=${ADMIN_USERS}
       - TEST_API_KEY=${TEST_API_KEY}
       - LOG_LEVEL=${LOG_LEVEL}
+      - VITE_API_URL=${VITE_API_URL}
     deploy:
       replicas: 1
       restart_policy:

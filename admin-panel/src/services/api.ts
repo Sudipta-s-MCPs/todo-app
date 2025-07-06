@@ -2,7 +2,7 @@ import axios from 'axios'
 import { useAuthStore } from '../store/authStore'
 
 // Get API URL from environment or default to local
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5482/api/v1'
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://192.168.11.108:5482/api/v1'
 
 // Create axios instance
 export const api = axios.create({

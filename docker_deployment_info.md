@@ -1,7 +1,7 @@
 # Smart-ToDo - Complete Docker Deployment Information
 
 ## Build Summary
-- **Build Date**: 2025-07-05 18:29:23 UTC
+- **Build Date**: 2025-07-06 07:59:19 UTC
 - **Tag**: latest
 - **Platforms**: linux/amd64,linux/arm64
 - **Registry**: GitHub Container Registry (ghcr.io)
@@ -20,7 +20,7 @@
 
 ### Admin Panel
 - **Image**: `ghcr.io/sudipta-s-mcps/smart-todo-admin:latest`
-- **Port**: 3000
+- **Port**: 80 (Nginx)
 - **Purpose**: Admin interface for system management
 
 ### MCP Server

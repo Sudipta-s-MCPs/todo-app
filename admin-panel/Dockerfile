@@ -30,46 +30,20 @@ RUN rm -rf /usr/share/nginx/html/* /etc/nginx/conf.d/*
 # Copy built application to nginx html directory
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Create custom nginx configuration for SPA
-RUN echo 'server { \
-    listen 80; \
-    server_name localhost; \
-    root /usr/share/nginx/html; \
-    index index.html; \
-    \
-    # Handle client-side routing \
-    location / { \
-        try_files $uri $uri/ /index.html; \
-    } \
-    \
-    # Security headers \
-    add_header X-Frame-Options DENY always; \
-    add_header X-Content-Type-Options nosniff always; \
-    add_header X-XSS-Protection "1; mode=block" always; \
-    \
-    # Gzip compression \
-    gzip on; \
-    gzip_types text/css application/javascript application/json image/svg+xml; \
-    gzip_comp_level 9; \
-    \
-    # Cache static assets \
-    location ~* \.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2)$ { \
-        expires 1y; \
-        add_header Cache-Control "public, immutable"; \
-    } \
-}' > /etc/nginx/conf.d/default.conf
+# Copy nginx configuration
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 # Create non-root user for security
-RUN adduser -D -s /bin/false -u 1001 nginx-user && \
-    chown -R nginx-user:nginx-user /usr/share/nginx/html && \
-    chown -R nginx-user:nginx-user /var/cache/nginx && \
-    chown -R nginx-user:nginx-user /var/log/nginx && \
-    chown -R nginx-user:nginx-user /etc/nginx/conf.d && \
-    touch /run/nginx.pid && \
-    chown nginx-user:nginx-user /run/nginx.pid
+RUN adduser -D -u 1001 appuser && \
+    chown -R appuser:appuser /usr/share/nginx/html && \
+    chown -R appuser:appuser /var/cache/nginx && \
+    chown -R appuser:appuser /var/log/nginx && \
+    chown -R appuser:appuser /etc/nginx/conf.d && \
+    touch /var/run/nginx.pid && \
+    chown -R appuser:appuser /var/run/nginx.pid
 
 # Switch to non-root user
-USER nginx-user
+USER appuser
 
 # Expose port 80 (nginx default)
 EXPOSE 80

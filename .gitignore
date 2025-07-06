@@ -120,3 +120,4 @@ desktop.ini
 # Production build files
 /admin-panel/build/
 /admin-panel/dist/
+stack.env

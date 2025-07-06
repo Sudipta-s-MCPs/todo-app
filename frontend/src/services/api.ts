@@ -3,7 +3,7 @@ import { useAuthStore } from '../store/authStore';
 import { getDeviceInfo } from '../utils/deviceId';
 
 // Get API URL from environment or default to local
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://todo-api.sudiptadhara.in/api/v1';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://todo-api.sudiptadhara.in/api/v1';
 
 // Store device info
 let deviceInfo: { deviceId: string; deviceName: string; deviceType: string } | null = null;

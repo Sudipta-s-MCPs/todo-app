@@ -94,6 +94,18 @@ class AuthenticatedFastMCP(FastMCP):
         # Add our auth capture middleware
         app.add_middleware(AuthCaptureMiddleware)
         
+        # Add health check endpoint
+        @app.route('/health', methods=['GET'])
+        async def health_check(request: Request):
+            """Simple health check endpoint for Docker"""
+            return JSONResponse({"status": "healthy", "service": "mcp-server"})
+        
+        # Also add a GET handler for /mcp/ to handle health checks
+        @app.route('/mcp/', methods=['GET'])
+        async def mcp_health(request: Request):
+            """Health check endpoint that mirrors the MCP path"""
+            return JSONResponse({"status": "healthy", "service": "mcp-server", "info": "Use POST for MCP protocol"})
+        
         return app
 
 
@@ -131,8 +143,13 @@ class AuthenticatedHttpClient:
         self.client = None
     
     async def __aenter__(self):
-        # Configure client to follow redirects automatically
-        self.client = httpx.AsyncClient(base_url=self.base_url, follow_redirects=True)
+        # Configure client to follow redirects automatically and increase timeout for slow operations
+        # Set timeout to 30 seconds to handle slow AI operations (duplicate detection, etc.)
+        self.client = httpx.AsyncClient(
+            base_url=self.base_url, 
+            follow_redirects=True,
+            timeout=httpx.Timeout(30.0)
+        )
         return self
     
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -286,7 +303,7 @@ async def create_task(
         "title": title,
         "description": description or "",
         "priority": priority,
-        "status": "pending"
+        "status": "todo"
     }
     
     if list_name:
@@ -297,7 +314,52 @@ async def create_task(
         task_data["assigned_to"] = assigned_to
     
     async with get_http_client(ctx) as client:
-        response = await client.post("/tasks", json=task_data)
+        # First, we need to find or create a list for the task
+        list_id = None
+        
+        # If list_name is provided, try to find it
+        if list_name:
+            # Get workspaces first
+            response = await client.get("/workspaces/")
+            workspaces = response.json()
+            
+            # Search for the list in all workspaces
+            for workspace in workspaces:
+                lists_response = await client.get(f"/workspaces/{workspace['id']}/lists")
+                lists = lists_response.json()
+                
+                for lst in lists:
+                    if lst["name"].lower() == list_name.lower():
+                        list_id = lst["id"]
+                        await ctx.info(f"Found list '{list_name}' in workspace '{workspace['name']}'")
+                        break
+                
+                if list_id:
+                    break
+        
+        # If no list found, use the default list from the first workspace
+        if not list_id:
+            response = await client.get("/workspaces/")
+            workspaces = response.json()
+            
+            if not workspaces:
+                await ctx.error("No workspaces found. Cannot create task.")
+                return {"status": "error", "message": "No workspaces found"}
+            
+            # Get lists from the first workspace
+            lists_response = await client.get(f"/workspaces/{workspaces[0]['id']}/lists")
+            lists = lists_response.json()
+            
+            if not lists:
+                await ctx.error("No lists found in the default workspace.")
+                return {"status": "error", "message": "No lists found"}
+            
+            # Use the first list
+            list_id = lists[0]["id"]
+            await ctx.info(f"Using default list '{lists[0]['name']}' in workspace '{workspaces[0]['name']}'")
+        
+        # Now create the task in the found list
+        response = await client.post(f"/lists/{list_id}/tasks", json=task_data)
         task = response.json()
         
         await ctx.info(f"Task created with ID: {task['id']}")
@@ -531,18 +593,27 @@ async def list_lists(
     # Handle null values from Claude
     workspace_id = handle_null(workspace_id)
     
-    params = {}
-    if workspace_id:
-        params["workspace_id"] = workspace_id
-    
     async with get_http_client(ctx) as client:
-        response = await client.get("/lists", params=params)
+        # If no workspace_id provided, get the first available workspace
+        if not workspace_id:
+            response = await client.get("/workspaces/")
+            workspaces = response.json()
+            if workspaces:
+                workspace_id = workspaces[0]["id"]
+                await ctx.info(f"Using default workspace: {workspaces[0]['name']}")
+            else:
+                await ctx.error("No workspaces found")
+                return {"lists": [], "count": 0}
+        
+        # Get lists for the workspace
+        response = await client.get(f"/workspaces/{workspace_id}/lists")
         lists = response.json()
         
         await ctx.info(f"Retrieved {len(lists)} lists")
         return {
             "lists": lists,
-            "count": len(lists)
+            "count": len(lists),
+            "workspace_id": workspace_id
         }
 
 

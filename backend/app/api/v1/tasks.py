@@ -7,6 +7,7 @@ from typing import List, Optional, Dict, Any
 from uuid import UUID
 from datetime import datetime
 import io
+import re
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query, UploadFile, File
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession

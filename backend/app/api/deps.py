@@ -4,6 +4,7 @@ Created: 2025-01-30 14:10:00 PST
 """
 
 from typing import Optional, Tuple
+from uuid import UUID
 from fastapi import Depends, HTTPException, status, Header, Request
 from fastapi.security import OAuth2PasswordBearer, APIKeyHeader
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +24,15 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=F
 
 # API Key scheme
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+def is_valid_uuid(value: str) -> bool:
+    """Check if a string is a valid UUID"""
+    try:
+        UUID(value)
+        return True
+    except (ValueError, AttributeError):
+        return False
 
 
 async def get_current_user_optional(
@@ -194,6 +204,9 @@ async def get_access_info_direct(
     # Extract API key
     api_key = request.headers.get("X-API-Key")
     
+    # Extract device ID from headers (for MCP agents)
+    header_device_id = request.headers.get("X-Device-ID")
+    
     # Determine access method from headers and auth
     user_agent = request.headers.get("User-Agent", "")
     
@@ -206,13 +219,30 @@ async def get_access_info_direct(
             # Check if it's an MCP agent
             if "mcp" in api_key_obj.name.lower():
                 access_method = AccessMethod.MCP
-                # Try to find associated MCP agent
-                result = await db.execute(
-                    select(MCPAgent).where(
-                        MCPAgent.user_id == api_key_obj.user_id,
-                        MCPAgent.is_active == True
+                # Only use device ID if it's a valid UUID
+                if header_device_id and is_valid_uuid(header_device_id):
+                    device_id = header_device_id
+                else:
+                    device_id = None  # Non-UUID device IDs are not stored
+                
+                # Try to find associated MCP agent using device ID if available
+                if header_device_id:
+                    result = await db.execute(
+                        select(MCPAgent).where(
+                            MCPAgent.user_id == api_key_obj.user_id,
+                            MCPAgent.agent_identifier == header_device_id,
+                            MCPAgent.is_active == True
+                        )
                     )
-                )
+                else:
+                    # Fallback to user_id only (should not happen with proper MCP clients)
+                    result = await db.execute(
+                        select(MCPAgent).where(
+                            MCPAgent.user_id == api_key_obj.user_id,
+                            MCPAgent.is_active == True
+                        )
+                    )
+                    
                 mcp_agent = result.scalar_one_or_none()
                 if mcp_agent:
                     mcp_agent_id = str(mcp_agent.id)
@@ -225,7 +255,12 @@ async def get_access_info_direct(
             if token_type == "access":
                 # Check session info in token
                 session_id = payload.get("session_id")
-                device_id = payload.get("device_id")
+                # Validate device_id from token
+                token_device_id = payload.get("device_id")
+                if token_device_id and is_valid_uuid(token_device_id):
+                    device_id = token_device_id
+                else:
+                    device_id = None
                 
                 # Determine access method from user agent
                 if "Mobile" in user_agent:
@@ -256,7 +291,11 @@ async def get_access_info_direct(
             
             if oauth_token and not oauth_token.is_access_token_expired:
                 access_method = AccessMethod.OAUTH
-                device_id = oauth_token.device_id
+                # Validate device_id from OAuth token
+                if oauth_token.device_id and is_valid_uuid(oauth_token.device_id):
+                    device_id = oauth_token.device_id
+                else:
+                    device_id = None
                 mcp_agent_id = str(oauth_token.mcp_agent_id) if oauth_token.mcp_agent_id else None
     
     return access_method, device_id, session_id, api_key_id, mcp_agent_id
@@ -278,6 +317,9 @@ async def get_access_info(
     api_key_id = None
     mcp_agent_id = None
     
+    # Extract device ID from headers (for MCP agents)
+    header_device_id = request.headers.get("X-Device-ID")
+    
     # Determine access method from headers and auth
     user_agent = request.headers.get("User-Agent", "")
     
@@ -290,13 +332,30 @@ async def get_access_info(
             # Check if it's an MCP agent
             if "mcp" in api_key_obj.name.lower():
                 access_method = AccessMethod.MCP
-                # Try to find associated MCP agent
-                result = await db.execute(
-                    select(MCPAgent).where(
-                        MCPAgent.user_id == api_key_obj.user_id,
-                        MCPAgent.is_active == True
+                # Only use device ID if it's a valid UUID
+                if header_device_id and is_valid_uuid(header_device_id):
+                    device_id = header_device_id
+                else:
+                    device_id = None  # Non-UUID device IDs are not stored
+                
+                # Try to find associated MCP agent using device ID if available
+                if header_device_id:
+                    result = await db.execute(
+                        select(MCPAgent).where(
+                            MCPAgent.user_id == api_key_obj.user_id,
+                            MCPAgent.agent_identifier == header_device_id,
+                            MCPAgent.is_active == True
+                        )
                     )
-                )
+                else:
+                    # Fallback to user_id only (should not happen with proper MCP clients)
+                    result = await db.execute(
+                        select(MCPAgent).where(
+                            MCPAgent.user_id == api_key_obj.user_id,
+                            MCPAgent.is_active == True
+                        )
+                    )
+                    
                 mcp_agent = result.scalar_one_or_none()
                 if mcp_agent:
                     mcp_agent_id = str(mcp_agent.id)
@@ -309,7 +368,12 @@ async def get_access_info(
             if token_type == "access":
                 # Check session info in token
                 session_id = payload.get("session_id")
-                device_id = payload.get("device_id")
+                # Validate device_id from token
+                token_device_id = payload.get("device_id")
+                if token_device_id and is_valid_uuid(token_device_id):
+                    device_id = token_device_id
+                else:
+                    device_id = None
                 
                 # Determine access method from user agent
                 if "Mobile" in user_agent:
@@ -340,7 +404,11 @@ async def get_access_info(
             
             if oauth_token and not oauth_token.is_access_token_expired:
                 access_method = AccessMethod.OAUTH
-                device_id = oauth_token.device_id
+                # Validate device_id from OAuth token
+                if oauth_token.device_id and is_valid_uuid(oauth_token.device_id):
+                    device_id = oauth_token.device_id
+                else:
+                    device_id = None
                 mcp_agent_id = str(oauth_token.mcp_agent_id) if oauth_token.mcp_agent_id else None
     
     return access_method, device_id, session_id, api_key_id, mcp_agent_id

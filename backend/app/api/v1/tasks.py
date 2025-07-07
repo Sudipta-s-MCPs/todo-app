@@ -5,7 +5,7 @@ Created: 2025-01-30 14:29:00 PST
 
 from typing import List, Optional, Dict, Any
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, timedelta
 import io
 import re
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Query, UploadFile, File
@@ -1308,5 +1308,133 @@ async def delete_attachment(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete attachment"
         )
+
+
+@router.get("/stats")
+async def get_task_stats(
+    workspace_id: Optional[UUID] = Query(None, description="Filter stats by workspace"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get task statistics for the current user"""
+    
+    # Base query for user's accessible tasks
+    base_query = select(Task).join(
+        TaskList, Task.list_id == TaskList.id
+    ).join(
+        Workspace, TaskList.workspace_id == Workspace.id
+    )
+    
+    # Filter by user's workspaces (owner or member)
+    workspace_subquery = select(Workspace.id).where(
+        and_(
+            Workspace.is_active == True,
+            or_(
+                Workspace.owner_id == current_user.id,
+                Workspace.id.in_(
+                    select(WorkspaceMember.workspace_id).where(
+                        WorkspaceMember.user_id == current_user.id
+                    )
+                )
+            )
+        )
+    )
+    
+    base_query = base_query.where(
+        and_(
+            Workspace.id.in_(workspace_subquery),
+            TaskList.is_archived == False
+        )
+    )
+    
+    # Apply workspace filter if provided
+    if workspace_id:
+        base_query = base_query.where(Workspace.id == workspace_id)
+    
+    # Get all tasks for the user
+    result = await db.execute(base_query)
+    tasks = result.scalars().all()
+    
+    # Calculate statistics
+    total_tasks = len(tasks)
+    
+    # Count by status
+    by_status = {
+        "todo": 0,
+        "in_progress": 0,
+        "completed": 0,
+        "archived": 0
+    }
+    
+    # Count by priority
+    by_priority = {
+        "low": 0,
+        "medium": 0,
+        "high": 0,
+        "urgent": 0
+    }
+    
+    # Count by due date
+    by_due_date = {
+        "overdue": 0,
+        "due_today": 0,
+        "due_this_week": 0,
+        "no_due_date": 0
+    }
+    
+    # Current date for comparisons
+    today = datetime.now().date()
+    week_from_now = datetime.now().date() + timedelta(days=7)
+    
+    for task in tasks:
+        # Count by status
+        by_status[task.status.value] += 1
+        
+        # Count by priority
+        by_priority[task.priority.value] += 1
+        
+        # Count by due date
+        if task.due_date:
+            due_date = task.due_date.date() if hasattr(task.due_date, 'date') else task.due_date
+            if due_date < today and task.status != TaskStatus.COMPLETED:
+                by_due_date["overdue"] += 1
+            elif due_date == today:
+                by_due_date["due_today"] += 1
+            elif due_date <= week_from_now:
+                by_due_date["due_this_week"] += 1
+        else:
+            by_due_date["no_due_date"] += 1
+    
+    # If workspace_id provided, get workspace-specific stats
+    workspace_stats = None
+    if workspace_id:
+        # Get lists in the workspace
+        lists_query = select(TaskList).where(
+            and_(
+                TaskList.workspace_id == workspace_id,
+                TaskList.is_archived == False
+            )
+        )
+        lists_result = await db.execute(lists_query)
+        lists = lists_result.scalars().all()
+        
+        workspace_stats = {
+            "lists": [
+                {
+                    "id": str(lst.id),
+                    "name": lst.name,
+                    "task_count": sum(1 for task in tasks if task.list_id == lst.id)
+                }
+                for lst in lists
+            ]
+        }
+    
+    return {
+        "total_tasks": total_tasks,
+        "by_status": by_status,
+        "by_priority": by_priority,
+        "by_due_date": by_due_date,
+        "workspace_stats": workspace_stats
+    }
 
 

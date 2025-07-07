@@ -1,7 +1,7 @@
 # Smart-ToDo - Complete Docker Deployment Information
 
 ## Build Summary
-- **Build Date**: 2025-07-07 16:08:31 UTC
+- **Build Date**: 2025-07-07 16:52:46 UTC
 - **Tag**: latest
 - **Platforms**: linux/amd64,linux/arm64
 - **Registry**: GitHub Container Registry (ghcr.io)

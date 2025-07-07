@@ -43,7 +43,9 @@ class ChatService:
         # Task listing patterns
         r"^(show|list|get)\s+(my\s+)?(all\s+)?tasks?$": "list_tasks",
         r"^what\s+(tasks?\s+)?do\s+i\s+have\??$": "list_tasks",
-        r"^(show|list)\s+tasks?\s+in\s+(.+)$": "list_workspace_tasks",
+        r"^(show|list)\s+tasks?\s+in\s+(.+)\s+workspace$": "list_workspace_tasks",
+        r"^(show|list|what\s+are)\s+(?:the\s+)?(?:done\s+|completed\s+)?tasks?\s+in\s+(.+)\s+list$": "list_list_tasks",
+        r"^(show|list)\s+(.+)\s+list\s+tasks?$": "list_list_tasks",
         
         # Priority-based task listing
         r"^(show|list|get)\s+(my\s+)?(high|medium|low)\s+priority\s+tasks?$": "list_priority_tasks",
@@ -60,6 +62,11 @@ class ChatService:
         r"^(?:just\s+)?(?:done|finished|completed)\s+(?:with\s+)?(?:the\s+)?(.+?)(?:\s+task)?$": "complete_task",
         r"^check\s+off\s+(?:the\s+)?(.+?)(?:\s+task)?$": "complete_task",
         r"^tick\s+(?:off\s+)?(?:the\s+)?(.+?)(?:\s+task)?$": "complete_task",
+        
+        # Task detail patterns
+        r"^(tell\s+me\s+more\s+about|show\s+details\s+for|what\s+is|describe)\s+(?:the\s+)?(.+?)\s+task$": "show_task_details",
+        r"^(more\s+info|details|information)\s+(?:about|on|for)\s+(?:the\s+)?(.+?)\s+task$": "show_task_details",
+        r"^(tell\s+me\s+about|show\s+me)\s+(?:the\s+)?(.+?)\s+task$": "show_task_details",
         
         # Workspace operations
         r"^(show|list)\s+(my\s+)?workspaces?$": "list_workspaces",
@@ -707,6 +714,271 @@ class ChatService:
             "action": "list_workspace_tasks",
             "tasks": [self._serialize_task(t) for t in tasks]
         }
+    
+    async def _handle_list_list_tasks(
+        self, 
+        match: re.Match, 
+        user_id: str, 
+        db: AsyncSession
+    ) -> Dict[str, Any]:
+        """Handle listing tasks in a specific list."""
+        # Extract list name from match (group 2)
+        list_name = match.group(2).strip()
+        
+        # Find the list across all user's workspaces
+        list_query = await db.execute(
+            select(List, Workspace).join(
+                Workspace, List.workspace_id == Workspace.id
+            ).where(
+                and_(
+                    or_(
+                        Workspace.owner_id == user_id,
+                        Workspace.id.in_(
+                            select(WorkspaceMember.workspace_id).where(
+                                WorkspaceMember.user_id == user_id
+                            )
+                        )
+                    ),
+                    func.lower(List.name) == list_name.lower()
+                )
+            )
+        )
+        result = list_query.first()
+        
+        if not result:
+            return {
+                "response": f"I couldn't find a list named '{list_name}'. Would you like me to show your available lists?",
+                "type": "error",
+                "action": "list_list_tasks"
+            }
+        
+        task_list, workspace = result
+        
+        # Get tasks in the list
+        # Check if user asked for completed/done tasks
+        show_completed = any(word in match.group(0).lower() for word in ['done', 'completed', 'finished'])
+        
+        if show_completed:
+            status_filter = Task.status == "completed"
+        else:
+            status_filter = Task.status.in_(["todo", "in_progress"])
+        
+        tasks = await db.execute(
+            select(Task).where(
+                and_(
+                    Task.list_id == task_list.id,
+                    status_filter
+                )
+            ).order_by(Task.created_at.desc()).limit(20)
+        )
+        tasks = tasks.scalars().all()
+        
+        if not tasks:
+            if show_completed:
+                return {
+                    "response": f"You don't have any completed tasks in the '{task_list.name}' list.",
+                    "type": "success",
+                    "action": "list_list_tasks"
+                }
+            else:
+                return {
+                    "response": f"You don't have any active tasks in the '{task_list.name}' list.",
+                    "type": "success",
+                    "action": "list_list_tasks"
+                }
+        
+        # Build response
+        if show_completed:
+            response = f"Completed tasks in **{task_list.name}** list ({workspace.name} workspace):\n\n"
+        else:
+            response = f"Tasks in **{task_list.name}** list ({workspace.name} workspace):\n\n"
+        
+        for i, task in enumerate(tasks, 1):
+            if show_completed:
+                response += f"{i}. ✅ **{task.title}**"
+                if task.completed_at:
+                    response += f" (completed {task.completed_at.strftime('%b %d')})"
+            else:
+                status_emoji = "🔄" if task.status == "in_progress" else "📋"
+                priority_emoji = "🔴" if task.priority == "high" else "🟡" if task.priority == "medium" else "🟢"
+                response += f"{i}. {status_emoji} {priority_emoji} **{task.title}**"
+                if task.due_date:
+                    response += f" (due {task.due_date.strftime('%b %d')})"
+            response += "\n"
+        
+        return {
+            "response": response.strip(),
+            "type": "success",
+            "action": "list_list_tasks",
+            "tasks": [self._serialize_task(t) for t in tasks]
+        }
+    
+    async def _handle_show_task_details(
+        self, 
+        match: re.Match, 
+        user_id: str, 
+        db: AsyncSession
+    ) -> Dict[str, Any]:
+        """Handle showing detailed information about a specific task."""
+        # Extract task name from match (group 2)
+        task_name = match.group(2).strip().lower()
+        
+        # Search for the task across all user's workspaces
+        # First try exact match, then fuzzy match
+        tasks_query = await db.execute(
+            select(Task, List, Workspace)
+            .join(List, Task.list_id == List.id)
+            .join(Workspace, List.workspace_id == Workspace.id)
+            .where(
+                and_(
+                    or_(
+                        Workspace.owner_id == user_id,
+                        Workspace.id.in_(
+                            select(WorkspaceMember.workspace_id).where(
+                                WorkspaceMember.user_id == user_id
+                            )
+                        )
+                    ),
+                    func.lower(Task.title) == task_name
+                )
+            )
+        )
+        result = tasks_query.first()
+        
+        # If no exact match, try fuzzy match
+        if not result:
+            tasks_query = await db.execute(
+                select(Task, List, Workspace)
+                .join(List, Task.list_id == List.id)
+                .join(Workspace, List.workspace_id == Workspace.id)
+                .where(
+                    and_(
+                        or_(
+                            Workspace.owner_id == user_id,
+                            Workspace.id.in_(
+                                select(WorkspaceMember.workspace_id).where(
+                                    WorkspaceMember.user_id == user_id
+                                )
+                            )
+                        ),
+                        func.lower(Task.title).like(f"%{task_name}%")
+                    )
+                )
+                .limit(5)  # Limit fuzzy matches
+            )
+            fuzzy_results = tasks_query.all()
+            
+            if not fuzzy_results:
+                return {
+                    "response": f"I couldn't find a task matching '{match.group(2).strip()}'. Try being more specific or check your task list first.",
+                    "type": "error",
+                    "action": "show_task_details"
+                }
+            
+            # If multiple fuzzy matches, ask for clarification
+            if len(fuzzy_results) > 1:
+                response = f"I found {len(fuzzy_results)} tasks matching '{match.group(2).strip()}':\n\n"
+                for i, (task, lst, workspace) in enumerate(fuzzy_results, 1):
+                    response += f"{i}. **{task.title}** (in {lst.name} list)\n"
+                response += "\nPlease be more specific about which task you'd like details for."
+                
+                return {
+                    "response": response,
+                    "type": "clarification",
+                    "action": "show_task_details",
+                    "tasks": [self._serialize_task(t) for t, _, _ in fuzzy_results]
+                }
+            
+            # Single fuzzy match - use it
+            result = fuzzy_results[0]
+        
+        task, task_list, workspace = result
+        
+        # Get additional task details
+        # Count comments
+        comment_count = await db.execute(
+            select(func.count(TaskComment.id)).where(TaskComment.task_id == task.id)
+        )
+        comment_count = comment_count.scalar() or 0
+        
+        # Count attachments
+        attachment_count = await db.execute(
+            select(func.count(TaskAttachment.id)).where(TaskAttachment.task_id == task.id)
+        )
+        attachment_count = attachment_count.scalar() or 0
+        
+        # Get assigned users
+        assignments = await db.execute(
+            select(TaskAssignment, User)
+            .join(User, TaskAssignment.user_id == User.id)
+            .where(TaskAssignment.task_id == task.id)
+        )
+        assigned_users = [(assignment, user) for assignment, user in assignments]
+        
+        # Build detailed response
+        response = f"## 📋 Task Details: **{task.title}**\n\n"
+        
+        # Basic info
+        response += f"**Status:** {self._format_status(task.status)}\n"
+        response += f"**Priority:** {self._format_priority(task.priority)}\n"
+        response += f"**Location:** {workspace.name} → {task_list.name}\n\n"
+        
+        # Description
+        if task.description:
+            response += f"**Description:**\n{task.description}\n\n"
+        else:
+            response += "**Description:** No description provided\n\n"
+        
+        # Dates
+        response += f"**Created:** {task.created_at.strftime('%B %d, %Y at %I:%M %p')}\n"
+        if task.due_date:
+            response += f"**Due Date:** {task.due_date.strftime('%B %d, %Y')}\n"
+        if task.completed_at:
+            response += f"**Completed:** {task.completed_at.strftime('%B %d, %Y at %I:%M %p')}\n"
+        response += "\n"
+        
+        # Assigned users
+        if assigned_users:
+            response += f"**Assigned to:**\n"
+            for assignment, user in assigned_users:
+                response += f"• {user.name} ({user.email})\n"
+            response += "\n"
+        
+        # Additional info
+        if comment_count > 0:
+            response += f"💬 **Comments:** {comment_count}\n"
+        if attachment_count > 0:
+            response += f"📎 **Attachments:** {attachment_count}\n"
+        
+        # Task ID (for advanced users)
+        response += f"\n*Task ID: {task.id}*"
+        
+        return {
+            "response": response.strip(),
+            "type": "success",
+            "action": "show_task_details",
+            "tasks": [self._serialize_task(task)]
+        }
+    
+    def _format_status(self, status: str) -> str:
+        """Format task status with emoji."""
+        status_map = {
+            "todo": "📋 To Do",
+            "in_progress": "🔄 In Progress",
+            "completed": "✅ Completed",
+            "archived": "📦 Archived"
+        }
+        return status_map.get(status, status)
+    
+    def _format_priority(self, priority: str) -> str:
+        """Format task priority with emoji."""
+        priority_map = {
+            "low": "🟢 Low",
+            "medium": "🟡 Medium",
+            "high": "🔴 High",
+            "urgent": "🚨 Urgent"
+        }
+        return priority_map.get(priority, priority)
     
     async def _handle_greeting(
         self, 

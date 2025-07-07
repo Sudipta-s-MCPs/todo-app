@@ -7,6 +7,7 @@ from typing import List, Dict, Tuple
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_
+from sqlalchemy.orm import selectinload
 from difflib import SequenceMatcher
 import re
 
@@ -104,7 +105,9 @@ class DuplicateDetector:
         similarity_hash = calculate_similarity_hash(title, description)
         
         # Query for tasks in the same workspace
-        query = select(Task).join(
+        query = select(Task).options(
+            selectinload(Task.list)
+        ).join(
             TaskList, Task.list_id == TaskList.id
         ).where(
             TaskList.workspace_id == workspace_id,

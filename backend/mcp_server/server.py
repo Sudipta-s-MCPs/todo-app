@@ -128,7 +128,7 @@ class TaskUpdateRequest(BaseModel):
     task_id: str = Field(..., description="Task ID to update")
     title: Optional[str] = Field(None, description="New task title")
     description: Optional[str] = Field(None, description="New task description")
-    status: Optional[str] = Field(None, description="Task status: pending, in_progress, completed")
+    status: Optional[str] = Field(None, description="Task status: todo, in_progress, completed, archived")
     priority: Optional[str] = Field(None, description="Priority: low, medium, high, urgent")
     due_date: Optional[str] = Field(None, description="Due date in ISO format")
 
@@ -208,6 +208,34 @@ def handle_null(value):
     return None if value is None else value
 
 
+def normalize_status(status: str) -> str:
+    """Normalize status values to match backend expectations"""
+    if status:
+        # Convert common variations to valid enum values
+        status_map = {
+            "in-progress": "in_progress",
+            "in progress": "in_progress",
+            "todo": "todo",
+            "pending": "todo",
+            "new": "todo",
+            "done": "completed",
+            "finished": "completed",
+            "complete": "completed",
+            "completed": "completed",
+            "archived": "archived",
+            "closed": "archived"
+        }
+        normalized = status_map.get(status.lower(), status.lower())
+        
+        # Validate against allowed values
+        valid_statuses = ["todo", "in_progress", "completed", "archived"]
+        if normalized not in valid_statuses:
+            raise ValueError(f"Invalid status: '{status}'. Must be one of: {', '.join(valid_statuses)}")
+        
+        return normalized
+    return status
+
+
 # Tool definitions
 
 @mcp.tool
@@ -224,10 +252,11 @@ async def list_tasks(
     
     Filter by workspace, list, status, or assigned user.
     Returns up to 'limit' tasks (default 50).
+    
+    Status values: todo, in_progress, completed, archived
+    (Also accepts: in-progress, done, finished, pending, new)
     """
     await ctx.info("Fetching tasks...")
-    
-
     
     # Handle null values from Claude
     workspace = handle_null(workspace)
@@ -235,34 +264,79 @@ async def list_tasks(
     status = handle_null(status)
     assigned_to = handle_null(assigned_to)
     
-    params = {}
-    if workspace:
-        params["workspace"] = workspace
-    if list_name:
-        params["list"] = list_name
-    if status:
-        params["status"] = status
-    if assigned_to:
-        params["assigned_to"] = assigned_to
-    params["limit"] = limit
-    
     async with get_http_client(ctx) as client:
-        # Use the search endpoint instead of a direct GET
+        # Resolve workspace name to ID if provided
+        workspace_id = None
+        if workspace:
+            response = await client.get("/workspaces/")
+            workspaces = response.json()
+            
+            for ws in workspaces:
+                if ws["name"].lower() == workspace.lower():
+                    workspace_id = ws["id"]
+                    await ctx.info(f"Found workspace '{workspace}' with ID {workspace_id}")
+                    break
+            
+            if not workspace_id:
+                await ctx.warning(f"Workspace '{workspace}' not found")
+                return {"tasks": [], "count": 0}
+        
+        # Resolve list name to ID(s) if provided
+        list_ids = []
+        if list_name:
+            # If we have a specific workspace, search only in that workspace
+            if workspace_id:
+                lists_response = await client.get(f"/workspaces/{workspace_id}/lists")
+                lists = lists_response.json()
+                
+                for lst in lists:
+                    if lst["name"].lower() == list_name.lower():
+                        list_ids.append(lst["id"])
+                        await ctx.info(f"Found list '{list_name}' in workspace '{workspace}'")
+                        break
+            else:
+                # Search all workspaces for the list
+                response = await client.get("/workspaces/")
+                workspaces = response.json()
+                
+                for ws in workspaces:
+                    lists_response = await client.get(f"/workspaces/{ws['id']}/lists")
+                    lists = lists_response.json()
+                    
+                    for lst in lists:
+                        if lst["name"].lower() == list_name.lower():
+                            list_ids.append(lst["id"])
+                            await ctx.info(f"Found list '{list_name}' in workspace '{ws['name']}'")
+                            # Don't break - there might be multiple lists with same name
+            
+            if not list_ids:
+                await ctx.warning(f"List '{list_name}' not found")
+                return {"tasks": [], "count": 0}
+        
+        # Build search parameters with resolved IDs
         search_params = {
-            "limit": params.get("limit", 50),
-            "offset": params.get("offset", 0)
+            "limit": limit,
+            "offset": 0
         }
         
-        # Add filters if provided
-        if params.get("status"):
-            search_params["status"] = params["status"]
-        if params.get("priority"):
-            search_params["priority"] = params["priority"]
-        if params.get("workspace_id"):
-            search_params["workspace_id"] = params["workspace_id"]
-        if params.get("query"):
-            search_params["query"] = params["query"]
-            
+        # Add filters with proper types
+        if workspace_id:
+            search_params["workspace_id"] = workspace_id
+        if list_ids:
+            search_params["list_ids"] = list_ids
+        if status:
+            try:
+                normalized_status = normalize_status(status)
+                # The API expects a list of statuses
+                search_params["status"] = [normalized_status]
+            except ValueError:
+                await ctx.warning(f"Invalid status filter '{status}' - ignoring")
+        if assigned_to:
+            # TODO: Resolve assigned_to email/name to user ID
+            # For now, skip this filter
+            await ctx.warning("assigned_to filter not yet implemented")
+        
+        # Make the search request
         response = await client.post("/tasks/search", json=search_params)
         tasks = response.json()
         
@@ -303,7 +377,7 @@ async def create_task(
         "title": title,
         "description": description or "",
         "priority": priority,
-        "status": "todo"
+        "status": normalize_status("todo")
     }
     
     if list_name:
@@ -402,7 +476,7 @@ async def smart_create_task(
         "title": parsed["title"],
         "description": parsed.get("description", ""),
         "priority": parsed.get("priority", "medium"),
-        "status": "pending"
+        "status": normalize_status("pending")  # Will normalize to "todo"
     }
     
     if parsed.get("due_date"):
@@ -443,6 +517,11 @@ async def update_task(
     
     Update any properties of a task by its ID.
     Only provided fields will be updated.
+    
+    Status values: todo, in_progress, completed, archived
+    (Also accepts: in-progress, done, finished, pending, new)
+    
+    Priority values: low, medium, high, urgent
     """
     await ctx.info(f"Updating task {task_id}")
     
@@ -459,7 +538,11 @@ async def update_task(
     if description is not None:
         update_data["description"] = description
     if status is not None:
-        update_data["status"] = status
+        try:
+            update_data["status"] = normalize_status(status)
+        except ValueError as e:
+            await ctx.error(str(e))
+            return {"status": "error", "message": str(e)}
     if priority is not None:
         update_data["priority"] = priority
     if due_date is not None:
@@ -487,7 +570,7 @@ async def complete_task(
     async with get_http_client(ctx) as client:
         response = await client.put(
             f"/tasks/{task_id}", 
-            json={"status": "completed"}
+            json={"status": normalize_status("completed")}
         )
         task = response.json()
         

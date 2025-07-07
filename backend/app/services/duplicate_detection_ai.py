@@ -7,6 +7,7 @@ from typing import List, Dict, Tuple, Optional
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.models.task import Task, TaskStatus
 from app.models.workspace import List as TaskList
@@ -69,7 +70,9 @@ class AIEnhancedDuplicateDetector(DuplicateDetector):
                 if vector_results:
                     task_ids = [UUID(vr[0]["task_id"]) for vr in vector_results]
                     result = await db.execute(
-                        select(Task).where(Task.id.in_(task_ids))
+                        select(Task)
+                        .options(selectinload(Task.list))
+                        .where(Task.id.in_(task_ids))
                     )
                     tasks_by_id = {task.id: task for task in result.scalars().all()}
                     

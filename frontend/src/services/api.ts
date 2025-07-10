@@ -1,9 +1,10 @@
 import axios, { AxiosError } from 'axios';
 import { useAuthStore } from '../store/authStore';
 import { getDeviceInfo } from '../utils/deviceId';
+import { config } from '../config/runtime';
 
-// Get API URL from environment or default to local
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5482/api/v1';
+// Get API URL from runtime config
+const API_BASE_URL = config.API_URL;
 
 // Store device info
 let deviceInfo: { deviceId: string; deviceName: string; deviceType: string } | null = null;

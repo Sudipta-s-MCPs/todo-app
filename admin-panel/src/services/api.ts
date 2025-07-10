@@ -1,8 +1,9 @@
 import axios from 'axios'
 import { useAuthStore } from '../store/authStore'
+import { config } from '../config/runtime'
 
-// Get API URL from environment or default to local
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5482/api/v1'
+// Get API URL from runtime config
+const API_BASE_URL = config.API_URL
 
 // Create axios instance
 export const api = axios.create({

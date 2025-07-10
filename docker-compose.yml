@@ -43,13 +43,12 @@ services:
     build:
       context: ./admin-panel
       dockerfile: Dockerfile
-      args:
-        VITE_API_URL: ${API_BASE_URL}/api/v1
     container_name: smart-todo-admin
     ports:
       - "${ADMIN_PORT:-5483}:3000"
     environment:
       - VITE_API_URL=${API_BASE_URL}/api/v1
+      - ENVIRONMENT=${ENVIRONMENT}
     # volumes:
     #   - ./admin-panel:/app
     #   - /app/node_modules
@@ -68,6 +67,7 @@ services:
       - "${FRONTEND_PORT:-5484}:80"
     environment:
       - VITE_API_URL=${API_BASE_URL}/api/v1
+      - ENVIRONMENT=${ENVIRONMENT}
     # volumes:
     #   - ./frontend:/app
     #   - /app/node_modules

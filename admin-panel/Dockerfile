@@ -3,9 +3,6 @@ FROM node:20-alpine as builder
 
 WORKDIR /app
 
-# Accept build arguments
-ARG VITE_API_URL
-
 # Copy package files
 COPY package.json ./
 
@@ -14,9 +11,6 @@ RUN npm install
 
 # Copy application code
 COPY . .
-
-# Set environment variable for build
-ENV VITE_API_URL=$VITE_API_URL
 
 # Build the application
 RUN npm run build
@@ -33,6 +27,9 @@ RUN rm -rf /usr/share/nginx/html/*
 # Copy built application to nginx html directory
 COPY --from=builder /app/dist /usr/share/nginx/html
 
+# Copy entrypoint script
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+
 # Create non-root user and necessary directories
 RUN adduser -D -s /bin/false -u 1001 nginx-user && \
     # Create temp directories that nginx needs
@@ -47,7 +44,9 @@ RUN adduser -D -s /bin/false -u 1001 nginx-user && \
     chown -R nginx-user:nginx-user /tmp/scgi_temp && \
     # Make sure nginx can write logs
     touch /var/run/nginx.pid && \
-    chown nginx-user:nginx-user /var/run/nginx.pid
+    chown nginx-user:nginx-user /var/run/nginx.pid && \
+    # Make entrypoint executable
+    chmod +x /docker-entrypoint.sh
 
 # Switch to non-root user
 USER nginx-user
@@ -59,8 +58,5 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:3000/ || exit 1
 
-# Override entrypoint to skip default scripts
-ENTRYPOINT ["nginx"]
-
-# Start nginx
-CMD ["-g", "daemon off;"]
+# Use entrypoint script
+ENTRYPOINT ["/docker-entrypoint.sh"]

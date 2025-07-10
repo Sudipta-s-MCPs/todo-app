@@ -1,3 +1,5 @@
+import { getWebSocketUrl } from '../config/runtime';
+
 export type WebSocketEventType = 
   | 'task_created'
   | 'task_updated'
@@ -36,9 +38,8 @@ class WebSocketService {
     }
 
     this.isIntentionallyClosed = false;
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.hostname + ':5482';
-    const wsUrl = `${protocol}//${host}/api/v1/ws?token=${token}`;
+    const baseWsUrl = getWebSocketUrl();
+    const wsUrl = `${baseWsUrl}?token=${encodeURIComponent(token)}`;
 
     try {
       this.ws = new WebSocket(wsUrl);

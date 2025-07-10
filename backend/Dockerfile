@@ -1,13 +1,14 @@
-# Multi-stage build for Smart-ToDo backend - Optimized for size
-FROM python:3.11-alpine as builder
+# Multi-stage build for Smart-ToDo backend - Full features with Debian
+FROM python:3.11-slim as builder
 
 # Install build dependencies
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y \
     gcc \
-    musl-dev \
-    postgresql-dev \
-    libffi-dev \
-    && pip install --upgrade pip
+    g++ \
+    libpq-dev \
+    build-essential \
+    && pip install --upgrade pip \
+    && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
@@ -22,23 +23,23 @@ COPY requirements.txt .
 RUN grep -v -E "^(pytest|black|flake8|mypy|faker|rich|asyncio-mqtt)" requirements.txt | grep -v "^#" | grep -v "^$" > requirements-filtered.txt && \
     pip install --no-cache-dir -r requirements-filtered.txt
 
-# Production stage - Ultra minimal
-FROM python:3.11-alpine
+# Production stage - Debian slim for full compatibility
+FROM python:3.11-slim
 
 WORKDIR /app
 
 # Install only runtime dependencies
-RUN apk add --no-cache \
-    postgresql-libs \
+RUN apt-get update && apt-get install -y \
+    libpq5 \
     curl \
-    && rm -rf /var/cache/apk/*
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy virtual environment from builder
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Create non-root user
-RUN adduser -D -u 1001 appuser
+RUN adduser --disabled-password --uid 1001 --gecos "" appuser
 
 # Copy only necessary application code (exclude dev files)
 COPY --chown=appuser:appuser app/ ./app/

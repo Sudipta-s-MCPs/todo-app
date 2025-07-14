@@ -93,6 +93,24 @@ export default function Dashboard() {
     }
   };
   
+  const handleStartTask = () => {
+    if (viewingTask) {
+      // Update the viewing task with in_progress status
+      setViewingTask({ ...viewingTask, status: 'in_progress' });
+      // Refresh the data
+      window.location.reload();
+    }
+  };
+  
+  const handlePauseTask = () => {
+    if (viewingTask) {
+      // Update the viewing task with todo status
+      setViewingTask({ ...viewingTask, status: 'todo' });
+      // Refresh the data
+      window.location.reload();
+    }
+  };
+  
   const handleArchiveTask = () => {
     if (viewingTask) {
       setDetailsDialogOpen(false);
@@ -375,6 +393,8 @@ export default function Dashboard() {
         onToggleStatus={handleToggleFromDetails}
         onArchive={handleArchiveTask}
         onUnarchive={handleUnarchiveTask}
+        onStartTask={handleStartTask}
+        onPauseTask={handlePauseTask}
       />
     </Container>
   );

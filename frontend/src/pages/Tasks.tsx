@@ -219,6 +219,40 @@ export default function Tasks() {
     }
   };
 
+  const handleStartTask = async () => {
+    if (viewingTask) {
+      try {
+        await updateTaskMutation.mutateAsync({
+          id: viewingTask.id,
+          data: { status: 'in_progress' }
+        });
+        enqueueSnackbar('Task started', { variant: 'success' });
+        setViewingTask({ ...viewingTask, status: 'in_progress' });
+      } catch (error: any) {
+        enqueueSnackbar(error.response?.data?.detail || 'Failed to start task', {
+          variant: 'error',
+        });
+      }
+    }
+  };
+
+  const handlePauseTask = async () => {
+    if (viewingTask) {
+      try {
+        await updateTaskMutation.mutateAsync({
+          id: viewingTask.id,
+          data: { status: 'todo' }
+        });
+        enqueueSnackbar('Task paused', { variant: 'success' });
+        setViewingTask({ ...viewingTask, status: 'todo' });
+      } catch (error: any) {
+        enqueueSnackbar(error.response?.data?.detail || 'Failed to pause task', {
+          variant: 'error',
+        });
+      }
+    }
+  };
+
   const handleArchiveTask = async () => {
     if (viewingTask) {
       try {
@@ -639,6 +673,8 @@ export default function Tasks() {
         onToggleStatus={handleToggleFromDetails}
         onArchive={handleArchiveTask}
         onUnarchive={handleUnarchiveTask}
+        onStartTask={handleStartTask}
+        onPauseTask={handlePauseTask}
       />
     </Box>
   );

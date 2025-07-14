@@ -6,6 +6,32 @@ import { styled } from '@mui/material/styles';
 import { useSnackbar } from 'notistack';
 import { attachmentService } from '../services/attachmentService';
 
+// Utility function to check if URL is external
+const isExternalUrl = (url: string): boolean => {
+  try {
+    const urlObj = new URL(url);
+    const currentDomain = window.location.hostname;
+    const apiDomain = import.meta.env.VITE_API_URL?.replace(/^https?:\/\//, '').replace(/\/.*$/, '') || 'todo-api.sudiptadhara.in';
+    
+    return urlObj.hostname !== currentDomain && 
+           urlObj.hostname !== apiDomain &&
+           !url.startsWith('data:') &&
+           !url.startsWith('blob:');
+  } catch {
+    return false;
+  }
+};
+
+// Utility function to transform external URLs to use proxy
+const transformImageUrl = (url: string): string => {
+  if (!isExternalUrl(url)) {
+    return url;
+  }
+  
+  const apiUrl = import.meta.env.VITE_API_URL || 'https://todo-api.sudiptadhara.in/api/v1';
+  return `${apiUrl}/proxy/images/external?url=${encodeURIComponent(url)}`;
+};
+
 // Styled wrapper for the editor
 const EditorWrapper = styled(Box)(({ theme }) => ({
   '& .quill': {
@@ -99,7 +125,9 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({
         if (quill) {
           const range = quill.getSelection();
           if (range) {
-            quill.insertEmbed(range.index, 'image', url);
+            // Transform external URLs to use proxy
+            const transformedUrl = transformImageUrl(url);
+            quill.insertEmbed(range.index, 'image', transformedUrl);
           }
         }
       }
@@ -193,7 +221,22 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({
   const handleChange = (content: string, _delta: any, _source: any, editor: any) => {
     // If the editor is empty (only contains <p><br></p>), treat it as empty string
     const isEmpty = editor.getText().trim() === '';
-    onChange(isEmpty ? '' : content);
+    
+    if (isEmpty) {
+      onChange('');
+      return;
+    }
+    
+    // Transform any external image URLs to use proxy
+    const transformedContent = content.replace(
+      /<img[^>]+src="([^"]+)"[^>]*>/g,
+      (match, url) => {
+        const transformedUrl = transformImageUrl(url);
+        return match.replace(url, transformedUrl);
+      }
+    );
+    
+    onChange(transformedContent);
   };
 
   return (

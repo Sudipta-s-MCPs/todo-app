@@ -162,13 +162,9 @@ app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 
 # Include WebSocket endpoint
 from app.websockets import websocket_endpoint
-app.add_api_websocket_route("/ws", websocket_endpoint)
+app.add_websocket_route("/ws", websocket_endpoint)
+# Also add under API prefix to work with proxy
+app.add_websocket_route("/api/v1/ws", websocket_endpoint)
 
 # Setup error handlers
 setup_error_handlers(app)
-
-# Add error handler middleware
-app.add_middleware(ErrorHandlerMiddleware)
-
-# Add request tracking
-app.add_middleware(RequestTrackingMiddleware)

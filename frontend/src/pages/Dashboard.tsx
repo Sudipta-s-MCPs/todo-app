@@ -11,6 +11,7 @@ import {
   List,
   ListItem,
   ListItemText,
+  ListItemButton,
   Button,
   Divider,
 } from '@mui/material';
@@ -27,13 +28,18 @@ import { format, isToday, isTomorrow, isPast } from 'date-fns';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 
+import { useState } from 'react';
 import { useAuthStore } from '../store/authStore';
 import { statsService } from '../services/statsService';
 import { taskService } from '../services/taskService';
+import TaskDetailsDialog from '../components/TaskDetailsDialog';
+import type { Task } from '../types';
 
 export default function Dashboard() {
   const user = useAuthStore((state) => state.user);
   const navigate = useNavigate();
+  const [viewingTask, setViewingTask] = useState<Task | undefined>();
+  const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
   
   
   const getGreeting = () => {
@@ -55,6 +61,54 @@ export default function Dashboard() {
   });
   
   const recommendations = focusTasks || [];
+  
+  // Handler for viewing task details
+  const handleViewTask = (task: Task) => {
+    setViewingTask(task);
+    setDetailsDialogOpen(true);
+  };
+  
+  const handleEditFromDetails = () => {
+    if (viewingTask) {
+      setDetailsDialogOpen(false);
+      navigate(`/tasks?edit=${viewingTask.id}`);
+    }
+  };
+  
+  const handleDeleteFromDetails = () => {
+    if (viewingTask) {
+      setDetailsDialogOpen(false);
+      // Refresh the data after deletion
+      window.location.reload();
+    }
+  };
+  
+  const handleToggleFromDetails = () => {
+    if (viewingTask) {
+      // Update the viewing task with new status
+      const newStatus = viewingTask.status === 'completed' ? 'todo' : 'completed';
+      setViewingTask({ ...viewingTask, status: newStatus });
+      // Refresh the data
+      window.location.reload();
+    }
+  };
+  
+  const handleArchiveTask = () => {
+    if (viewingTask) {
+      setDetailsDialogOpen(false);
+      setViewingTask(undefined);
+      // Refresh the data
+      window.location.reload();
+    }
+  };
+  
+  const handleUnarchiveTask = () => {
+    if (viewingTask) {
+      setViewingTask({ ...viewingTask, status: 'todo' });
+      // Refresh the data  
+      window.location.reload();
+    }
+  };
   
   
   
@@ -198,8 +252,12 @@ export default function Dashboard() {
                 {recommendations.map((recommendation) => (
                   <ListItem
                     key={recommendation.task.id}
-                    sx={{ px: 0, py: 1.5 }}
+                    disablePadding
                   >
+                    <ListItemButton
+                      onClick={() => handleViewTask(recommendation.task)}
+                      sx={{ px: 0, py: 1.5 }}
+                    >
                     <ListItemText
                       primary={
                         <Box display="flex" alignItems="center" gap={1}>
@@ -247,6 +305,7 @@ export default function Dashboard() {
                         </Box>
                       }
                     />
+                    </ListItemButton>
                   </ListItem>
                 ))}
               </List>
@@ -302,6 +361,21 @@ export default function Dashboard() {
           </Paper>
         </Grid>
       </Grid>
+      
+      {/* Task Details Dialog */}
+      <TaskDetailsDialog
+        open={detailsDialogOpen}
+        onClose={() => {
+          setDetailsDialogOpen(false);
+          setViewingTask(undefined);
+        }}
+        task={viewingTask || null}
+        onEdit={handleEditFromDetails}
+        onDelete={handleDeleteFromDetails}
+        onToggleStatus={handleToggleFromDetails}
+        onArchive={handleArchiveTask}
+        onUnarchive={handleUnarchiveTask}
+      />
     </Container>
   );
 }

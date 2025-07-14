@@ -1,5 +1,10 @@
 # Claude Code Instructions: Replace FastMCP with Official MCP Library
 
+> **⚠️ ARCHIVED DOCUMENT - MIGRATION COMPLETE**  
+> This migration has been successfully completed on 2025-07-14.  
+> The official MCP library is now in use at `backend/mcp_server/server_official.py`.  
+> This document is preserved for historical reference only.
+
 ## 📋 Overview
 
 This document provides step-by-step instructions for replacing the FastMCP implementation in your Smart-ToDo MCP Server with the official MCP library. This will eliminate schema compatibility issues between Claude Code and Claude Desktop.

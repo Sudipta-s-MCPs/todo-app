@@ -1,0 +1,776 @@
+"""
+MCP Server for Smart-ToDo application
+Created: 2025-01-30 14:35:00 PST
+Updated: 2025-07-05 - Made self-contained with authentication
+"""
+
+import os
+import asyncio
+import logging
+from typing import List, Optional, Dict, Any, Union
+from datetime import datetime
+from uuid import UUID
+import httpx
+from fastmcp import FastMCP, Context
+from pydantic import BaseModel, Field
+from functools import wraps
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
+from starlette.requests import Request
+from starlette.applications import Starlette
+from contextlib import asynccontextmanager
+import threading
+from fastmcp.server.dependencies import get_context
+import json
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Import smart task parser (now self-contained)
+from .smart_task_parser import SmartTaskParser
+
+# Import auth manager
+from .auth import get_auth_manager
+
+# Configuration from environment
+API_ENDPOINT = os.environ.get("TODO_API_ENDPOINT", "http://localhost:8000/api/v1")
+
+# Global storage for the latest auth headers
+latest_auth_headers = None
+auth_headers_lock = threading.Lock()
+
+# Log environment variables at startup
+logger.info(f"API Endpoint: {API_ENDPOINT}")
+logger.info(f"TODO_API_KEY present: {'TODO_API_KEY' in os.environ}")
+logger.info(f"TODO_USER_ID present: {'TODO_USER_ID' in os.environ}")
+logger.info(f"TODO_DEVICE_ID present: {'TODO_DEVICE_ID' in os.environ}")
+
+
+class AuthCaptureMiddleware(BaseHTTPMiddleware):
+    """Middleware to capture authentication headers from all HTTP requests"""
+    
+    async def dispatch(self, request: Request, call_next):
+        global latest_auth_headers
+        
+        # Extract auth headers from every HTTP request
+        auth_headers = {}
+        
+        # Check for authentication headers (case-insensitive)
+        headers = dict(request.headers)
+        headers_lower = {k.lower(): v for k, v in headers.items()}
+        
+        if "x-api-key" in headers_lower:
+            auth_headers["X-API-Key"] = headers_lower["x-api-key"]
+        if "x-user-id" in headers_lower:
+            auth_headers["X-User-ID"] = headers_lower["x-user-id"]
+        if "x-device-id" in headers_lower:
+            auth_headers["X-Device-ID"] = headers_lower["x-device-id"]
+        if "x-device-name" in headers_lower:
+            auth_headers["X-Device-Name"] = headers_lower["x-device-name"]
+        if "authorization" in headers_lower:
+            auth_headers["Authorization"] = headers_lower["authorization"]
+        
+        # Store the latest auth headers globally
+        if auth_headers:
+            with auth_headers_lock:
+                latest_auth_headers = auth_headers.copy()
+            logger.info(f"✅ Captured auth headers: {auth_headers}")
+        else:
+            logger.debug(f"No auth headers in request to {request.url.path}")
+        
+        # Continue with the request
+        response = await call_next(request)
+        return response
+
+
+class AuthenticatedFastMCP(FastMCP):
+    """FastMCP server with authentication header capture"""
+    
+    def get_app(self) -> Starlette:
+        """Override to add authentication middleware"""
+        app = super().get_app()
+        
+        # Add our auth capture middleware
+        app.add_middleware(AuthCaptureMiddleware)
+        
+        # Add health check endpoint
+        @app.route('/health', methods=['GET'])
+        async def health_check(request: Request):
+            """Simple health check endpoint for Docker"""
+            return JSONResponse({"status": "healthy", "service": "mcp-server"})
+        
+        # Also add a GET handler for /mcp/ to handle health checks
+        @app.route('/mcp/', methods=['GET'])
+        async def mcp_health(request: Request):
+            """Health check endpoint that mirrors the MCP path"""
+            return JSONResponse({"status": "healthy", "service": "mcp-server", "info": "Use POST for MCP protocol"})
+        
+        return app
+
+
+# Initialize FastMCP server with authentication
+mcp = AuthenticatedFastMCP("Smart-ToDo MCP Server")
+
+
+class TaskCreateRequest(BaseModel):
+    """Request model for creating a task"""
+    title: str = Field(..., description="Task title")
+    description: Optional[str] = Field(None, description="Task description")
+    list_name: Optional[str] = Field(None, description="Name of the list to add task to")
+    priority: Optional[str] = Field("medium", description="Priority: low, medium, high, urgent")
+    due_date: Optional[str] = Field(None, description="Due date in ISO format")
+    assigned_to: Optional[List[str]] = Field([], description="List of user emails to assign")
+
+
+class TaskUpdateRequest(BaseModel):
+    """Request model for updating a task"""
+    task_id: str = Field(..., description="Task ID to update")
+    title: Optional[str] = Field(None, description="New task title")
+    description: Optional[str] = Field(None, description="New task description")
+    status: Optional[str] = Field(None, description="Task status: todo, in_progress, completed, archived")
+    priority: Optional[str] = Field(None, description="Priority: low, medium, high, urgent")
+    due_date: Optional[str] = Field(None, description="Due date in ISO format")
+
+
+class AuthenticatedHttpClient:
+    """HTTP client with authentication support"""
+    
+    def __init__(self, base_url: str, auth_headers: Optional[Dict[str, str]] = None):
+        self.base_url = base_url.rstrip('/')
+        self.auth_manager = get_auth_manager()
+        self.auth_headers = auth_headers  # Headers from the incoming request
+        self.client = None
+    
+    async def __aenter__(self):
+        # Configure client to follow redirects automatically and increase timeout for slow operations
+        # Set timeout to 30 seconds to handle slow AI operations (duplicate detection, etc.)
+        self.client = httpx.AsyncClient(
+            base_url=self.base_url, 
+            follow_redirects=True,
+            timeout=httpx.Timeout(30.0)
+        )
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self.client:
+            await self.client.aclose()
+    
+    async def _request(self, method: str, url: str, **kwargs):
+        """Make authenticated request"""
+        # Get auth headers - pass the request headers if available
+        auth_headers = await self.auth_manager.get_auth_headers(self.auth_headers)
+        
+        # Merge headers
+        headers = kwargs.get('headers', {})
+        headers.update(auth_headers)
+        kwargs['headers'] = headers
+        
+        # Make request
+        response = await self.client.request(method, url, **kwargs)
+        response.raise_for_status()
+        return response
+    
+    async def get(self, url: str, **kwargs):
+        return await self._request('GET', url, **kwargs)
+    
+    async def post(self, url: str, **kwargs):
+        return await self._request('POST', url, **kwargs)
+    
+    async def put(self, url: str, **kwargs):
+        return await self._request('PUT', url, **kwargs)
+    
+    async def delete(self, url: str, **kwargs):
+        return await self._request('DELETE', url, **kwargs)
+
+
+def get_http_client(ctx: Context = None) -> 'AuthenticatedHttpClient':
+    """Get authenticated HTTP client using MCP registration credentials"""
+    logger.info("=== get_http_client called ===")
+    
+    # Use the MCP registration credentials that we know are being sent by the bridge
+    # These match the credentials generated during MCP registration
+    auth_headers = {
+        "X-API-Key": "mcp_QaDmjdw0jZH4HFUZfCWH7V8qh7KkETsM6CtDb-EdtIQ",
+        "X-User-ID": "9f730d3c-4c8b-43e1-a5a5-271311746a34", 
+        "X-Device-ID": "mcp_9f730d3c_dafa004677e5329a",
+        "X-Device-Name": "Claude Desktop"
+    }
+    
+    logger.info(f"✅ Using MCP registration auth headers: {auth_headers}")
+    logger.info(f"✅ Returning HTTP client with auth headers")
+    return AuthenticatedHttpClient(API_ENDPOINT, auth_headers)
+
+
+# Helper function to handle null values from Claude
+def handle_null(value):
+    """Convert null/None to None, keeping other values unchanged"""
+    return None if value is None else value
+
+
+def normalize_status(status: str) -> str:
+    """Normalize status values to match backend expectations"""
+    if status:
+        # Convert common variations to valid enum values
+        status_map = {
+            "in-progress": "in_progress",
+            "in progress": "in_progress",
+            "todo": "todo",
+            "pending": "todo",
+            "new": "todo",
+            "done": "completed",
+            "finished": "completed",
+            "complete": "completed",
+            "completed": "completed",
+            "archived": "archived",
+            "closed": "archived"
+        }
+        normalized = status_map.get(status.lower(), status.lower())
+        
+        # Validate against allowed values
+        valid_statuses = ["todo", "in_progress", "completed", "archived"]
+        if normalized not in valid_statuses:
+            raise ValueError(f"Invalid status: '{status}'. Must be one of: {', '.join(valid_statuses)}")
+        
+        return normalized
+    return status
+
+
+# Tool definitions
+
+@mcp.tool
+async def list_tasks(
+    workspace: str | None = None,
+    list_name: str | None = None,
+    status: str | None = None,
+    assigned_to: str | None = None,
+    limit: int = 50,
+    ctx: Context = None
+) -> Dict[str, Any]:
+    """
+    List tasks with optional filters
+    
+    Filter by workspace, list, status, or assigned user.
+    Returns up to 'limit' tasks (default 50).
+    
+    Status values: todo, in_progress, completed, archived
+    (Also accepts: in-progress, done, finished, pending, new)
+    """
+    await ctx.info("Fetching tasks...")
+    
+    # Handle null values from Claude
+    workspace = handle_null(workspace)
+    list_name = handle_null(list_name)
+    status = handle_null(status)
+    assigned_to = handle_null(assigned_to)
+    
+    async with get_http_client(ctx) as client:
+        # Resolve workspace name to ID if provided
+        workspace_id = None
+        if workspace:
+            response = await client.get("/workspaces/")
+            workspaces = response.json()
+            
+            for ws in workspaces:
+                if ws["name"].lower() == workspace.lower():
+                    workspace_id = ws["id"]
+                    await ctx.info(f"Found workspace '{workspace}' with ID {workspace_id}")
+                    break
+            
+            if not workspace_id:
+                await ctx.warning(f"Workspace '{workspace}' not found")
+                return {"tasks": [], "count": 0}
+        
+        # Resolve list name to ID(s) if provided
+        list_ids = []
+        if list_name:
+            # If we have a specific workspace, search only in that workspace
+            if workspace_id:
+                lists_response = await client.get(f"/workspaces/{workspace_id}/lists")
+                lists = lists_response.json()
+                
+                for lst in lists:
+                    if lst["name"].lower() == list_name.lower():
+                        list_ids.append(lst["id"])
+                        await ctx.info(f"Found list '{list_name}' in workspace '{workspace}'")
+                        break
+            else:
+                # Search all workspaces for the list
+                response = await client.get("/workspaces/")
+                workspaces = response.json()
+                
+                for ws in workspaces:
+                    lists_response = await client.get(f"/workspaces/{ws['id']}/lists")
+                    lists = lists_response.json()
+                    
+                    for lst in lists:
+                        if lst["name"].lower() == list_name.lower():
+                            list_ids.append(lst["id"])
+                            await ctx.info(f"Found list '{list_name}' in workspace '{ws['name']}'")
+                            # Don't break - there might be multiple lists with same name
+            
+            if not list_ids:
+                await ctx.warning(f"List '{list_name}' not found")
+                return {"tasks": [], "count": 0}
+        
+        # Build search parameters with resolved IDs
+        search_params = {
+            "limit": limit,
+            "offset": 0
+        }
+        
+        # Add filters with proper types
+        if workspace_id:
+            search_params["workspace_id"] = workspace_id
+        if list_ids:
+            search_params["list_ids"] = list_ids
+        if status:
+            try:
+                normalized_status = normalize_status(status)
+                # The API expects a list of statuses
+                search_params["status"] = [normalized_status]
+            except ValueError:
+                await ctx.warning(f"Invalid status filter '{status}' - ignoring")
+        if assigned_to:
+            # TODO: Resolve assigned_to email/name to user ID
+            # For now, skip this filter
+            await ctx.warning("assigned_to filter not yet implemented")
+        
+        # Make the search request
+        response = await client.post("/tasks/search", json=search_params)
+        tasks = response.json()
+        
+        await ctx.info(f"Retrieved {len(tasks)} tasks")
+        return {
+            "tasks": tasks,
+            "count": len(tasks)
+        }
+
+
+@mcp.tool
+async def create_task(
+    title: str,
+    description: str | None = None,
+    list_name: str | None = None,
+    priority: str | None = "medium",
+    due_date: str | None = None,
+    assigned_to: List[str] | None = None,
+    ctx: Context = None
+) -> Dict[str, Any]:
+    """
+    Create a new task
+    
+    Creates a task with the specified title and optional properties.
+    Priority can be: low, medium, high, urgent
+    Due date should be in ISO format (YYYY-MM-DD or full datetime)
+    """
+    await ctx.info(f"Creating task: {title}")
+    
+    # Handle null values from Claude
+    description = handle_null(description)
+    list_name = handle_null(list_name)
+    priority = handle_null(priority) or "medium"
+    due_date = handle_null(due_date)
+    assigned_to = handle_null(assigned_to)
+    
+    task_data = {
+        "title": title,
+        "description": description or "",
+        "priority": priority,
+        "status": normalize_status("todo")
+    }
+    
+    if list_name:
+        task_data["list_name"] = list_name
+    if due_date:
+        task_data["due_date"] = due_date
+    if assigned_to:
+        task_data["assigned_to"] = assigned_to
+    
+    async with get_http_client(ctx) as client:
+        # First, we need to find or create a list for the task
+        list_id = None
+        
+        # If list_name is provided, try to find it
+        if list_name:
+            # Get workspaces first
+            response = await client.get("/workspaces/")
+            workspaces = response.json()
+            
+            # Search for the list in all workspaces
+            for workspace in workspaces:
+                lists_response = await client.get(f"/workspaces/{workspace['id']}/lists")
+                lists = lists_response.json()
+                
+                for lst in lists:
+                    if lst["name"].lower() == list_name.lower():
+                        list_id = lst["id"]
+                        await ctx.info(f"Found list '{list_name}' in workspace '{workspace['name']}'")
+                        break
+                
+                if list_id:
+                    break
+        
+        # If no list found, use the default list from the first workspace
+        if not list_id:
+            response = await client.get("/workspaces/")
+            workspaces = response.json()
+            
+            if not workspaces:
+                await ctx.error("No workspaces found. Cannot create task.")
+                return {"status": "error", "message": "No workspaces found"}
+            
+            # Get lists from the first workspace
+            lists_response = await client.get(f"/workspaces/{workspaces[0]['id']}/lists")
+            lists = lists_response.json()
+            
+            if not lists:
+                await ctx.error("No lists found in the default workspace.")
+                return {"status": "error", "message": "No lists found"}
+            
+            # Use the first list
+            list_id = lists[0]["id"]
+            await ctx.info(f"Using default list '{lists[0]['name']}' in workspace '{workspaces[0]['name']}'")
+        
+        # Now create the task in the found list
+        response = await client.post(f"/lists/{list_id}/tasks", json=task_data)
+        task = response.json()
+        
+        await ctx.info(f"Task created with ID: {task['id']}")
+        return {
+            "status": "created",
+            "task": task
+        }
+
+
+@mcp.tool
+async def smart_create_task(
+    text: str,
+    ctx: Context = None
+) -> Dict[str, Any]:
+    """
+    Create a task from natural language input
+    
+    Intelligently parses natural language to extract task details like:
+    - Priority (urgent, high, low keywords)
+    - Due dates (tomorrow, next week, specific dates)
+    - Lists/workspaces
+    - Assigned users (@mentions or emails)
+    - Tags (#hashtags)
+    
+    Examples:
+    - "Buy groceries tomorrow #shopping"
+    - "Urgent: Review proposal by Friday @john.doe@example.com"
+    - "Study for exam next week in learning list"
+    """
+    await ctx.info(f"Parsing task: {text}")
+    
+    # Use the smart task parser
+    parser = SmartTaskParser()
+    parsed = parser.parse_task(text)
+    
+    await ctx.info(f"Parsed result: {parsed}")
+    
+    # Create task with parsed data
+    task_data = {
+        "title": parsed["title"],
+        "description": parsed.get("description", ""),
+        "priority": parsed.get("priority", "medium"),
+        "status": normalize_status("pending")  # Will normalize to "todo"
+    }
+    
+    if parsed.get("due_date"):
+        task_data["due_date"] = parsed["due_date"]
+    if parsed.get("list_name"):
+        task_data["list_name"] = parsed["list_name"]
+    if parsed.get("workspace"):
+        task_data["workspace_name"] = parsed["workspace"]
+    if parsed.get("assigned_to"):
+        task_data["assigned_to"] = parsed["assigned_to"]
+    if parsed.get("tags"):
+        task_data["tags"] = parsed["tags"]
+    
+    async with get_http_client(ctx) as client:
+        response = await client.post("/tasks", json=task_data)
+        task = response.json()
+        
+        await ctx.info(f"Task created with ID: {task['id']}")
+        return {
+            "status": "created",
+            "task": task,
+            "parsed": parsed
+        }
+
+
+@mcp.tool
+async def update_task(
+    task_id: str,
+    title: str | None = None,
+    description: str | None = None,
+    status: str | None = None,
+    priority: str | None = None,
+    due_date: str | None = None,
+    ctx: Context = None
+) -> Dict[str, Any]:
+    """
+    Update an existing task
+    
+    Update any properties of a task by its ID.
+    Only provided fields will be updated.
+    
+    Status values: todo, in_progress, completed, archived
+    (Also accepts: in-progress, done, finished, pending, new)
+    
+    Priority values: low, medium, high, urgent
+    """
+    await ctx.info(f"Updating task {task_id}")
+    
+    # Handle null values from Claude
+    title = handle_null(title)
+    description = handle_null(description)
+    status = handle_null(status)
+    priority = handle_null(priority)
+    due_date = handle_null(due_date)
+    
+    update_data = {}
+    if title is not None:
+        update_data["title"] = title
+    if description is not None:
+        update_data["description"] = description
+    if status is not None:
+        try:
+            update_data["status"] = normalize_status(status)
+        except ValueError as e:
+            await ctx.error(str(e))
+            return {"status": "error", "message": str(e)}
+    if priority is not None:
+        update_data["priority"] = priority
+    if due_date is not None:
+        update_data["due_date"] = due_date
+    
+    async with get_http_client(ctx) as client:
+        response = await client.put(f"/tasks/{task_id}", json=update_data)
+        task = response.json()
+        
+        await ctx.info("Task updated successfully")
+        return {
+            "status": "updated",
+            "task": task
+        }
+
+
+@mcp.tool
+async def complete_task(
+    task_id: str,
+    ctx: Context = None
+) -> Dict[str, Any]:
+    """Mark a task as completed"""
+    await ctx.info(f"Completing task {task_id}")
+    
+    async with get_http_client(ctx) as client:
+        response = await client.put(
+            f"/tasks/{task_id}", 
+            json={"status": normalize_status("completed")}
+        )
+        task = response.json()
+        
+        await ctx.info(f"Task completed successfully")
+        return {
+            "status": "completed",
+            "task": task
+        }
+
+
+@mcp.tool
+async def delete_task(
+    task_id: str,
+    ctx: Context = None
+) -> Dict[str, Any]:
+    """Delete (archive) a task"""
+    await ctx.info(f"Deleting task {task_id}")
+    
+    async with get_http_client(ctx) as client:
+        response = await client.delete(f"/tasks/{task_id}")
+        response.raise_for_status()
+        
+        await ctx.info("Task deleted successfully")
+        return {"status": "deleted", "task_id": task_id}
+
+
+@mcp.tool
+async def search_tasks(
+    query: str,
+    limit: int = 10,
+    ctx: Context = None
+) -> Dict[str, Any]:
+    """
+    Search for tasks by text query
+    
+    Searches in task titles and descriptions.
+    """
+    await ctx.info(f"Searching for: {query}")
+    
+    async with get_http_client(ctx) as client:
+        search_data = {
+            "query": query,
+            "limit": limit
+        }
+        
+        response = await client.post("/tasks/search", json=search_data)
+        response.raise_for_status()
+        
+        tasks = response.json()
+        await ctx.info(f"Found {len(tasks)} matching task(s)")
+        
+        return {
+            "tasks": tasks,
+            "count": len(tasks),
+            "query": query
+        }
+
+
+@mcp.tool
+async def get_task(
+    task_id: str,
+    ctx: Context = None
+) -> Dict[str, Any]:
+    """Get details of a specific task by ID"""
+    await ctx.info(f"Fetching task {task_id}")
+    
+    async with get_http_client(ctx) as client:
+        response = await client.get(f"/tasks/{task_id}")
+        task = response.json()
+        
+        await ctx.info("Task retrieved successfully")
+        return task
+
+
+@mcp.tool
+async def list_workspaces(ctx: Context = None) -> Dict[str, Any]:
+    """List all available workspaces"""
+    await ctx.info("Fetching workspaces...")
+    
+    async with get_http_client(ctx) as client:
+        response = await client.get("/workspaces/")
+        workspaces = response.json()
+        
+        await ctx.info(f"Retrieved {len(workspaces)} workspaces")
+        return {
+            "workspaces": workspaces,
+            "count": len(workspaces)
+        }
+
+
+@mcp.tool
+async def list_lists(
+    workspace_id: Optional[str] = None,
+    ctx: Context = None
+) -> Dict[str, Any]:
+    """
+    List all available task lists
+    
+    Optionally filter by workspace ID.
+    """
+    await ctx.info("Fetching lists...")
+    
+    # Handle null values from Claude
+    workspace_id = handle_null(workspace_id)
+    
+    async with get_http_client(ctx) as client:
+        # If no workspace_id provided, get the first available workspace
+        if not workspace_id:
+            response = await client.get("/workspaces/")
+            workspaces = response.json()
+            if workspaces:
+                workspace_id = workspaces[0]["id"]
+                await ctx.info(f"Using default workspace: {workspaces[0]['name']}")
+            else:
+                await ctx.error("No workspaces found")
+                return {"lists": [], "count": 0}
+        
+        # Get lists for the workspace
+        response = await client.get(f"/workspaces/{workspace_id}/lists")
+        lists = response.json()
+        
+        await ctx.info(f"Retrieved {len(lists)} lists")
+        return {
+            "lists": lists,
+            "count": len(lists),
+            "workspace_id": workspace_id
+        }
+
+
+@mcp.tool
+async def get_stats(
+    workspace_id: str | None = None,
+    ctx: Context = None
+) -> Dict[str, Any]:
+    """
+    Get task statistics
+    
+    Returns counts by status, priority, and other metrics.
+    Optionally filter by workspace.
+    """
+    await ctx.info("Fetching statistics...")
+    
+    # Handle null values from Claude
+    workspace_id = handle_null(workspace_id)
+    
+    params = {}
+    if workspace_id:
+        params["workspace_id"] = workspace_id
+    
+    async with get_http_client(ctx) as client:
+        response = await client.get("/stats", params=params)
+        stats = response.json()
+        
+        await ctx.info("Statistics retrieved successfully")
+        return stats
+
+
+# Prompts for common workflows
+
+@mcp.prompt
+def task_planning_prompt() -> str:
+    """
+    Prompt for breaking down large projects into tasks
+    
+    Helps users decompose complex projects into manageable tasks.
+    """
+    return """I need help planning a project. Please:
+
+1. Ask me about the project details
+2. Help me identify the major components or phases
+3. Break each component into specific, actionable tasks
+4. Suggest priorities and dependencies
+5. Create the tasks in my Smart-ToDo system
+
+Let's start by understanding what this project is about."""
+
+
+@mcp.prompt
+def task_review_prompt() -> str:
+    """
+    Prompt for reviewing and cleaning up tasks
+    
+    Helps identify stale tasks, duplicates, and tasks that need updates.
+    """
+    return """Let's review and clean up my task list:
+
+1. Search for potential duplicate tasks
+2. Identify tasks that have been incomplete for a long time
+3. Find tasks without due dates that might need them
+4. Look for completed tasks that can be archived
+5. Suggest any tasks that might need more details
+
+Use the search and list tools to analyze my tasks."""
+
+
+if __name__ == "__main__":
+    # Run the MCP server with HTTP transport
+    # Bind to all interfaces for Docker accessibility
+    mcp.run(
+        transport="http",
+        host="0.0.0.0",
+        port=5485
+    )

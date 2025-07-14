@@ -1,1 +1,0 @@
-"""Test package for Smart-ToDo backend"""

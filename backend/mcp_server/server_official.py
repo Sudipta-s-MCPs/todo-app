@@ -36,7 +36,7 @@ logging.basicConfig(
 logger = logging.getLogger("smart-todo-mcp")
 
 # Configuration
-API_ENDPOINT = os.environ.get("TODO_API_ENDPOINT", "http://localhost:8000/api/v1")
+API_ENDPOINT = os.environ.get("TODO_API_ENDPOINT", "https://todo-api.sudiptadhara.in/api/v1")
 
 class SmartTodoMCPServer:
     """Official MCP Server implementation for Smart-ToDo"""

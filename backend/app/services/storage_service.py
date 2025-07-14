@@ -5,6 +5,7 @@ Created: 2025-01-02 11:30:00 PST
 
 import io
 import json
+import os
 from typing import Optional, Dict, Any, BinaryIO
 from uuid import UUID
 from datetime import datetime, timedelta

@@ -42,6 +42,7 @@ import { format, formatDistanceToNow, isToday, isTomorrow, isPast } from 'date-f
 
 import type { Task } from '../types';
 import TaskAttachments from './TaskAttachments';
+import RichTextViewer from './RichTextViewer';
 
 interface TaskDetailsDialogProps {
   open: boolean;
@@ -191,16 +192,14 @@ export default function TaskDetailsDialog({
           {/* Details Tab */}
           <Stack spacing={3}>
             {/* Description */}
-            {task.description && (
-              <Box>
-                <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                  Description
-                </Typography>
-                <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap' }}>
-                  {task.description}
-                </Typography>
-              </Box>
-            )}
+            <Box>
+              <RichTextViewer
+                content={task.description || ''}
+                label="Description"
+                emptyText="No description provided"
+                maxHeight="300px"
+              />
+            </Box>
 
             {/* Properties Grid */}
             <Grid container spacing={3}>

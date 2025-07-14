@@ -52,7 +52,7 @@ export default function Tasks() {
   const { workspaceId, listId } = useParams<{ workspaceId?: string; listId?: string }>();
   
   // State
-  const [tab, setTab] = useState<'all' | 'active' | 'completed' | 'archived'>('all');
+  const [tab, setTab] = useState<'todo' | 'active' | 'completed' | 'archived' | 'all'>('todo');
   const [search, setSearch] = useState('');
   const [debouncedSearch] = useDebounce(search, 300);
   const [selectedWorkspace, setSelectedWorkspace] = useState<string>('');
@@ -99,14 +99,16 @@ export default function Tasks() {
           offset: 0,
         };
 
-        if (tab === 'active') {
+        if (tab === 'todo') {
+          params.status = ['todo'];
+        } else if (tab === 'active') {
           params.status = ['in_progress'];
         } else if (tab === 'completed') {
           params.status = ['completed'];
         } else if (tab === 'archived') {
           params.status = ['archived'];
         } else if (tab === 'all') {
-          params.status = ['todo', 'in_progress'];
+          // Don't set any status filter for 'all' tab
         }
 
         if (selectedPriority) params.priority = [selectedPriority];
@@ -124,14 +126,16 @@ export default function Tasks() {
       if (selectedWorkspace) params.workspace_id = selectedWorkspace;
       if (selectedPriority) params.priority = [selectedPriority];
 
-      if (tab === 'active') {
+      if (tab === 'todo') {
+        params.status = ['todo'];
+      } else if (tab === 'active') {
         params.status = ['in_progress'];
       } else if (tab === 'completed') {
         params.status = ['completed'];
       } else if (tab === 'archived') {
         params.status = ['archived'];
       } else if (tab === 'all') {
-        params.status = ['todo', 'in_progress'];
+        // Don't set any status filter for 'all' tab
       }
 
       return taskService.searchTasks(params);
@@ -142,10 +146,11 @@ export default function Tasks() {
 
   // Defensive filter: only show tasks matching the current tab's status
   const filteredTasks = tasks.filter((task) => {
+    if (tab === 'todo') return task.status === 'todo';
     if (tab === 'active') return task.status === 'in_progress';
     if (tab === 'completed') return task.status === 'completed';
     if (tab === 'archived') return task.status === 'archived';
-    if (tab === 'all') return task.status === 'todo' || task.status === 'in_progress';
+    if (tab === 'all') return true; // Show all tasks
     return true;
   });
 
@@ -484,10 +489,11 @@ export default function Tasks() {
         )}
 
         <Tabs value={tab} onChange={(_, v) => setTab(v)}>
-          <Tab label="All Tasks" value="all" />
+          <Tab label="To Do" value="todo" />
           <Tab label="Active" value="active" />
           <Tab label="Completed" value="completed" />
           <Tab label="Archived" value="archived" />
+          <Tab label="All Tasks" value="all" />
         </Tabs>
       </Box>
 

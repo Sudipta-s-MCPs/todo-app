@@ -69,6 +69,9 @@ pillow==11.1.0
 # Email templating
 jinja2==3.1.2
 
+# HTML sanitization
+bleach==6.1.0
+
 # Note: This consolidated file replaces:
 # - backend/requirements.txt
 # - backend/requirements-prod.txt

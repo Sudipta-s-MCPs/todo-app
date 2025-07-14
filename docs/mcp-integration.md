@@ -1,7 +1,8 @@
 # MCP Integration Guide
 
 **Created**: 2025-01-30 14:56:00 PST  
-**Last Modified**: 2025-01-30 14:56:00 PST
+**Last Modified**: 2025-07-14
+**Server**: Official MCP Library (Claude Desktop compatible)
 
 ## Overview
 
@@ -36,27 +37,63 @@ export TODO_API_ENDPOINT=http://localhost:8000/api/v1
 
 ### 3. Run the MCP Server
 
+#### Option A: Direct stdio Server (Recommended)
+
 ```bash
 cd backend
-python mcp_server/server.py
+python mcp_server/server_official.py
 ```
 
-Or use with Claude Desktop by adding to your MCP configuration:
+Configure Claude Desktop:
 
 ```json
 {
-  "mcpServers": {
-    "smart-todo": {
-      "command": "python",
-      "args": ["/path/to/backend/mcp_server/server.py"],
-      "env": {
-        "TODO_API_KEY": "your-api-key",
-        "TODO_API_ENDPOINT": "http://localhost:8000/api/v1"
-      }
+  "Smart ToDo": {
+    "command": "python3",
+    "args": ["/path/to/backend/mcp_server/server_official.py"],
+    "env": {
+      "TODO_API_KEY": "your-api-key",
+      "TODO_USER_ID": "your-user-id",
+      "TODO_DEVICE_ID": "your-device-id",
+      "TODO_DEVICE_NAME": "Claude Desktop",
+      "TODO_API_ENDPOINT": "http://localhost:5482/api/v1"
     }
   }
 }
 ```
+
+#### Option B: HTTP Bridge (Docker-friendly)
+
+If using Docker or prefer HTTP transport:
+
+```bash
+cd backend
+python mcp_server/server.py  # Runs on port 5485
+```
+
+Then use client_wrapper.py for stdio bridge:
+
+```json
+{
+  "Smart ToDo": {
+    "command": "python3",
+    "args": ["/path/to/backend/mcp_server/client_wrapper.py"],
+    "env": {
+      "TODO_API_KEY": "your-api-key",
+      "TODO_USER_ID": "your-user-id",
+      "TODO_DEVICE_ID": "your-device-id",
+      "TODO_DEVICE_NAME": "Claude Desktop"
+    }
+  }
+}
+```
+
+## Benefits of Official MCP Implementation
+
+- **Claude Desktop Compatible**: No schema validation errors
+- **Clean JSON Schemas**: No FastMCP-specific context parameters
+- **Standards Compliant**: Uses official MCP protocol
+- **Better Performance**: Direct stdio connection without HTTP overhead
 
 ## Available Tools
 

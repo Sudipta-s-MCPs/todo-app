@@ -1,6 +1,7 @@
 # MCP Client Setup Guide
 
-**Last Updated**: 2025-07-03 20:30:00 PST
+**Last Updated**: 2025-07-14
+**MCP Server**: Official MCP Library (replaced FastMCP)
 
 ## Overview
 
@@ -27,56 +28,99 @@ claude mcp add --transport http smart-todo http://localhost:5485/mcp \
 
 ### Claude Desktop
 
-**Great News!** Claude Desktop now has native support for remote MCP servers (HTTP-based). You no longer need mcp-remote or Node.js!
+**Two Configuration Options Available:**
 
-#### Native Remote MCP Support (Recommended)
+#### Option 1: Direct stdio Connection (Recommended - No Schema Issues)
 
-Available for Pro, Max, Teams, and Enterprise users:
+Use the official MCP server directly for the cleanest setup:
 
-**Option 1: OAuth Authentication (Preferred)**
-See [OAuth Integration for Claude Desktop](./OAUTH_CLAUDE_DESKTOP_INTEGRATION.md) for detailed setup instructions.
+```json
+{
+  "Smart ToDo": {
+    "command": "/usr/local/bin/python3",
+    "args": [
+      "/path/to/backend/mcp_server/server_official.py"
+    ],
+    "env": {
+      "TODO_API_ENDPOINT": "http://localhost:5482/api/v1",
+      "TODO_API_KEY": "your-api-key",
+      "TODO_USER_ID": "your-user-id",
+      "TODO_DEVICE_ID": "your-device-id",
+      "TODO_DEVICE_NAME": "Claude Desktop",
+      "PYTHONUNBUFFERED": "1"
+    }
+  }
+}
+```
 
-**Option 2: API Key Authentication**
-1. Open Claude Desktop
-2. Go to **Settings > Integrations**
-3. Add a new remote MCP server:
-   - **Endpoint URL**: `http://localhost:5485/mcp`
-   - **Authentication**: Configure headers as provided during agent registration
+#### Option 2: HTTP Bridge Connection (Docker-friendly)
 
-The authentication headers you'll need:
-- `X-API-Key`: Your API key
-- `X-Device-ID`: Your device ID
-- `X-Device-Name`: Your device name
-- `X-User-ID`: Your user ID
+If you prefer to keep using the HTTP bridge (especially with Docker deployments):
 
-#### Legacy Configuration (If native support is not available)
+```json
+{
+  "Smart ToDo": {
+    "command": "/usr/local/bin/python3",
+    "args": [
+      "/path/to/backend/mcp_server/client_wrapper.py"
+    ],
+    "env": {
+      "TODO_API_KEY": "your-api-key",
+      "TODO_USER_ID": "your-user-id",
+      "TODO_DEVICE_ID": "your-device-id",
+      "TODO_DEVICE_NAME": "Claude Desktop",
+      "PYTHONUNBUFFERED": "1"
+    }
+  }
+}
+```
 
-For users without access to native remote MCP support, you can still use the manual configuration, but be aware of Node.js compatibility issues with mcp-remote.
+**Note**: Option 1 uses the new official MCP implementation which has perfect Claude Desktop compatibility with no schema issues.
 
 ### VS Code
 
-Similar to Claude Desktop, VS Code requires mcp-remote proxy:
+Use the official MCP server directly:
 
 ```json
 {
   "mcp.servers": {
     "smart-todo": {
-      "command": "npx",
-      "args": ["mcp-remote", "http://localhost:5485/mcp"],
+      "command": "python3",
+      "args": ["/path/to/backend/mcp_server/server_official.py"],
       "environment": {
+        "TODO_API_ENDPOINT": "http://localhost:5482/api/v1",
         "TODO_API_KEY": "YOUR_API_KEY",
         "TODO_USER_ID": "YOUR_USER_ID",
         "TODO_DEVICE_ID": "YOUR_DEVICE_ID",
-        "TODO_DEVICE_NAME": "YOUR_DEVICE_NAME"
+        "TODO_DEVICE_NAME": "VS Code"
       }
     }
   }
 }
 ```
 
+## Getting Your API Credentials
+
+Run the setup script to register an MCP agent:
+
+```bash
+cd backend
+python mcp_server/setup_mcp.py
+```
+
+This will provide you with:
+- API Key (`TODO_API_KEY`)
+- User ID (`TODO_USER_ID`)
+- Device ID (`TODO_DEVICE_ID`)
+- Device Name (`TODO_DEVICE_NAME`)
+
 ## Troubleshooting
 
-### "SyntaxError: The requested module 'node:fs/promises' does not provide an export named 'constants'"
+### Schema Validation Errors in Claude Desktop
+
+If using the old FastMCP server, switch to `server_official.py` which has clean schemas.
+
+### Connection Issues
 
 This error occurs when using Node.js v14 or lower. The mcp-remote package requires Node.js v16+.
 

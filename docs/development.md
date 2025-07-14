@@ -138,15 +138,19 @@ Use the API documentation at http://localhost:8000/docs for interactive testing.
 
 2. **Run MCP server**:
    ```bash
-   docker-compose exec backend python mcp_server/server.py
+   docker-compose exec backend python mcp_server/server_official.py
    ```
 
 3. **Test with client**:
    ```python
-   from fastmcp import Client
+   # Using official MCP library
+   from mcp.client import Client
+   from mcp.client.stdio import stdio_client
    
-   async with Client("http://localhost:8765") as client:
-       result = await client.call_tool("list_tasks", {})
+   # Connect via stdio
+   async with stdio_client() as (read_stream, write_stream):
+       async with Client(read_stream, write_stream) as client:
+           result = await client.call_tool("list_tasks", {})
        print(result)
    ```
 

@@ -424,7 +424,7 @@ See [Deployment Guide](docs/deployment.md) for detailed instructions on deployin
 ## Acknowledgments
 
 - Built with FastAPI and React
-- MCP integration powered by FastMCP
+- MCP integration using official MCP library (Claude Desktop compatible)
 - Deployed on Synology NAS infrastructure
 
 ---

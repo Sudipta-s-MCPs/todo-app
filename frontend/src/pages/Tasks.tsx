@@ -92,7 +92,40 @@ export default function Tasks() {
   const tasksQuery = useQuery({
     queryKey: ['tasks', tab, debouncedSearch, selectedWorkspace, selectedPriority, sortBy, sortOrder, listId],
     queryFn: () => {
-      // If we have a specific listId, use getListTasks instead
+      // Always use searchTasks when there's a search query, even in list view
+      if (debouncedSearch) {
+        const params: any = {
+          query: debouncedSearch,
+          limit: 50,
+          offset: 0,
+        };
+
+        // Add list filter if in list view
+        if (listId) {
+          params.list_ids = [listId];
+        }
+
+        // Add workspace filter
+        if (selectedWorkspace) params.workspace_id = selectedWorkspace;
+        if (selectedPriority) params.priority = [selectedPriority];
+
+        // Add status filter based on tab
+        if (tab === 'todo') {
+          params.status = ['todo'];
+        } else if (tab === 'active') {
+          params.status = ['in_progress'];
+        } else if (tab === 'completed') {
+          params.status = ['completed'];
+        } else if (tab === 'archived') {
+          params.status = ['archived'];
+        } else if (tab === 'all') {
+          // Don't set any status filter for 'all' tab
+        }
+
+        return taskService.searchTasks(params);
+      }
+
+      // If we have a specific listId and no search query, use getListTasks
       if (listId) {
         const params: any = {
           limit: 50,
@@ -116,9 +149,8 @@ export default function Tasks() {
         return taskService.getListTasks(listId, params);
       }
 
-      // Otherwise use search
+      // Otherwise use search without query
       const params: any = {
-        query: debouncedSearch || undefined,
         limit: 50,
         offset: 0,
       };

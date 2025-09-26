@@ -2,7 +2,7 @@ version: '3.9'
 
 services:
   backend:
-    image: ghcr.io/sudipta-s-mcps/smart-todo-backend:latest
+    build: ./backend
     ports:
       - "5482:8000"
     environment:
@@ -31,7 +31,7 @@ services:
     #   start_period: 40s
 
   frontend:
-    image: ghcr.io/sudipta-s-mcps/smart-todo-frontend:latest
+    build: ./frontend
     ports:
       - "5484:80"
     environment:
@@ -49,7 +49,7 @@ services:
       start_period: 20s
 
   admin-panel:
-    image: ghcr.io/sudipta-s-mcps/smart-todo-admin:latest
+    build: ./admin-panel
     ports:
       - "5483:80"
     environment:
@@ -67,7 +67,7 @@ services:
       start_period: 30s
 
   mcp-server:
-    image: ghcr.io/sudipta-s-mcps/smart-todo-mcp:latest
+    build: ./mcp_server
     ports:
       - "5485:5485"
     environment:

@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     
     # API Configuration
     API_V1_PREFIX: str = Field(default="/api/v1")
-    API_BASE_URL: str = Field(default="http://localhost:8000")
+    API_BASE_URL: str = Field(default="https://todo-api.sudiptadhara.in")
     CORS_ORIGINS: Union[List[str], str] = Field(default=["http://localhost:3000"])
     
     @field_validator('CORS_ORIGINS', mode='before')

@@ -52,7 +52,7 @@ export default function Tasks() {
   const { workspaceId, listId } = useParams<{ workspaceId?: string; listId?: string }>();
   
   // State
-  const [tab, setTab] = useState<'all' | 'active' | 'completed' | 'archived'>('all');
+  const [tab, setTab] = useState<'todo' | 'active' | 'completed' | 'archived' | 'all'>('todo');
   const [search, setSearch] = useState('');
   const [debouncedSearch] = useDebounce(search, 300);
   const [selectedWorkspace, setSelectedWorkspace] = useState<string>('');
@@ -92,21 +92,56 @@ export default function Tasks() {
   const tasksQuery = useQuery({
     queryKey: ['tasks', tab, debouncedSearch, selectedWorkspace, selectedPriority, sortBy, sortOrder, listId],
     queryFn: () => {
-      // If we have a specific listId, use getListTasks instead
-      if (listId) {
+      // Always use searchTasks when there's a search query, even in list view
+      if (debouncedSearch) {
         const params: any = {
+          query: debouncedSearch,
           limit: 50,
           offset: 0,
         };
 
-        if (tab === 'active') {
+        // Add list filter if in list view
+        if (listId) {
+          params.list_ids = [listId];
+        }
+
+        // Add workspace filter
+        if (selectedWorkspace) params.workspace_id = selectedWorkspace;
+        if (selectedPriority) params.priority = [selectedPriority];
+
+        // Add status filter based on tab
+        if (tab === 'todo') {
+          params.status = ['todo'];
+        } else if (tab === 'active') {
           params.status = ['in_progress'];
         } else if (tab === 'completed') {
           params.status = ['completed'];
         } else if (tab === 'archived') {
           params.status = ['archived'];
         } else if (tab === 'all') {
-          params.status = ['todo', 'in_progress'];
+          // Don't set any status filter for 'all' tab
+        }
+
+        return taskService.searchTasks(params);
+      }
+
+      // If we have a specific listId and no search query, use getListTasks
+      if (listId) {
+        const params: any = {
+          limit: 50,
+          offset: 0,
+        };
+
+        if (tab === 'todo') {
+          params.status = ['todo'];
+        } else if (tab === 'active') {
+          params.status = ['in_progress'];
+        } else if (tab === 'completed') {
+          params.status = ['completed'];
+        } else if (tab === 'archived') {
+          params.status = ['archived'];
+        } else if (tab === 'all') {
+          // Don't set any status filter for 'all' tab
         }
 
         if (selectedPriority) params.priority = [selectedPriority];
@@ -114,9 +149,8 @@ export default function Tasks() {
         return taskService.getListTasks(listId, params);
       }
 
-      // Otherwise use search
+      // Otherwise use search without query
       const params: any = {
-        query: debouncedSearch || undefined,
         limit: 50,
         offset: 0,
       };
@@ -124,14 +158,16 @@ export default function Tasks() {
       if (selectedWorkspace) params.workspace_id = selectedWorkspace;
       if (selectedPriority) params.priority = [selectedPriority];
 
-      if (tab === 'active') {
+      if (tab === 'todo') {
+        params.status = ['todo'];
+      } else if (tab === 'active') {
         params.status = ['in_progress'];
       } else if (tab === 'completed') {
         params.status = ['completed'];
       } else if (tab === 'archived') {
         params.status = ['archived'];
       } else if (tab === 'all') {
-        params.status = ['todo', 'in_progress'];
+        // Don't set any status filter for 'all' tab
       }
 
       return taskService.searchTasks(params);
@@ -142,10 +178,11 @@ export default function Tasks() {
 
   // Defensive filter: only show tasks matching the current tab's status
   const filteredTasks = tasks.filter((task) => {
+    if (tab === 'todo') return task.status === 'todo';
     if (tab === 'active') return task.status === 'in_progress';
     if (tab === 'completed') return task.status === 'completed';
     if (tab === 'archived') return task.status === 'archived';
-    if (tab === 'all') return task.status === 'todo' || task.status === 'in_progress';
+    if (tab === 'all') return true; // Show all tasks
     return true;
   });
 
@@ -216,6 +253,40 @@ export default function Tasks() {
       // Update the viewing task with new status
       const newStatus = viewingTask.status === 'completed' ? 'todo' : 'completed';
       setViewingTask({ ...viewingTask, status: newStatus });
+    }
+  };
+
+  const handleStartTask = async () => {
+    if (viewingTask) {
+      try {
+        await updateTaskMutation.mutateAsync({
+          id: viewingTask.id,
+          data: { status: 'in_progress' }
+        });
+        enqueueSnackbar('Task started', { variant: 'success' });
+        setViewingTask({ ...viewingTask, status: 'in_progress' });
+      } catch (error: any) {
+        enqueueSnackbar(error.response?.data?.detail || 'Failed to start task', {
+          variant: 'error',
+        });
+      }
+    }
+  };
+
+  const handlePauseTask = async () => {
+    if (viewingTask) {
+      try {
+        await updateTaskMutation.mutateAsync({
+          id: viewingTask.id,
+          data: { status: 'todo' }
+        });
+        enqueueSnackbar('Task paused', { variant: 'success' });
+        setViewingTask({ ...viewingTask, status: 'todo' });
+      } catch (error: any) {
+        enqueueSnackbar(error.response?.data?.detail || 'Failed to pause task', {
+          variant: 'error',
+        });
+      }
     }
   };
 
@@ -450,10 +521,11 @@ export default function Tasks() {
         )}
 
         <Tabs value={tab} onChange={(_, v) => setTab(v)}>
-          <Tab label="All Tasks" value="all" />
+          <Tab label="To Do" value="todo" />
           <Tab label="Active" value="active" />
           <Tab label="Completed" value="completed" />
           <Tab label="Archived" value="archived" />
+          <Tab label="All Tasks" value="all" />
         </Tabs>
       </Box>
 
@@ -639,6 +711,8 @@ export default function Tasks() {
         onToggleStatus={handleToggleFromDetails}
         onArchive={handleArchiveTask}
         onUnarchive={handleUnarchiveTask}
+        onStartTask={handleStartTask}
+        onPauseTask={handlePauseTask}
       />
     </Box>
   );

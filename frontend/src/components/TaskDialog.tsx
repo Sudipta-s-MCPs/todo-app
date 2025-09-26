@@ -40,6 +40,7 @@ import { useSnackbar } from 'notistack';
 import type { Task, TaskCreate, TaskUpdate, Workspace, List, DuplicateTaskError } from '../types';
 import { listService } from '../services/listService';
 import TaskAttachments from './TaskAttachments';
+import RichTextEditor from './RichTextEditor';
 
 interface TaskDialogProps {
   open: boolean;
@@ -373,12 +374,13 @@ export default function TaskDialog({
               name="description"
               control={control}
               render={({ field }) => (
-                <TextField
-                  {...field}
+                <RichTextEditor
+                  value={field.value || ''}
+                  onChange={field.onChange}
                   label="Description"
-                  fullWidth
-                  multiline
-                  rows={3}
+                  placeholder="Add a detailed description..."
+                  taskId={task?.id}
+                  enableImageUpload={!!task}
                 />
               )}
             />

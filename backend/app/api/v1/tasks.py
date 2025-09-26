@@ -35,6 +35,7 @@ from app.services.duplicate_detection_ai import AIEnhancedDuplicateDetector, che
 from app.services.vector_service import get_vector_service
 from app.utils.security import calculate_similarity_hash
 from app.utils.logging import get_logger
+from app.utils.html_sanitizer import sanitize_html
 from app.websockets.notifications import notifications
 from app.services.storage_service import get_storage_service
 
@@ -204,7 +205,7 @@ async def create_task(
     task = Task(
         list_id=list_id,
         title=task_data.title,
-        description=task_data.description,
+        description=sanitize_html(task_data.description),
         status=task_data.status,
         priority=task_data.priority,
         due_date=task_data.due_date,
@@ -541,19 +542,21 @@ async def update_task(
         task.title = task_data.title
         task.similarity_hash = calculate_similarity_hash(task_data.title, task.description)
     
-    if task_data.description is not None and task_data.description != task.description:
-        modifications.append(TaskModification(
-            task_id=task_id,
-            field_name="description",
-            old_value=task.description,
-            new_value=task_data.description,
-            modified_by=current_user.id,
-            modified_via_device_id=device_id,
-            modified_via_method=access_method,
-            modified_via_session_id=session_id
-        ))
-        task.description = task_data.description
-        task.similarity_hash = calculate_similarity_hash(task.title, task_data.description)
+    if task_data.description is not None:
+        sanitized_description = sanitize_html(task_data.description)
+        if sanitized_description != task.description:
+            modifications.append(TaskModification(
+                task_id=task_id,
+                field_name="description",
+                old_value=task.description,
+                new_value=sanitized_description,
+                modified_by=current_user.id,
+                modified_via_device_id=device_id,
+                modified_via_method=access_method,
+                modified_via_session_id=session_id
+            ))
+            task.description = sanitized_description
+            task.similarity_hash = calculate_similarity_hash(task.title, sanitized_description)
     
     if task_data.status is not None and task_data.status != task.status:
         modifications.append(TaskModification(

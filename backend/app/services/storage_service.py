@@ -5,6 +5,7 @@ Created: 2025-01-02 11:30:00 PST
 
 import io
 import json
+import os
 from typing import Optional, Dict, Any, BinaryIO
 from uuid import UUID
 from datetime import datetime, timedelta
@@ -158,9 +159,13 @@ class StorageService:
                     expires=expiry
                 )
             else:
-                # Generate permanent URL (requires public read policy)
-                protocol = "https" if self.secure else "http"
-                return f"{protocol}://{self.endpoint}/{self.bucket_name}/{object_name}"
+                # Generate permanent URL through proxy to avoid mixed content issues
+                # Use the API proxy endpoint for secure delivery
+                from app.config import settings
+                api_base = settings.API_BASE_URL.rstrip('/')
+                # Encode the MinIO path for the proxy
+                proxy_path = f"{self.bucket_name}/{object_name}"
+                return f"{api_base}/api/v1/proxy/images/minio/{proxy_path}"
                 
         except Exception as e:
             logger.error(f"Failed to generate file URL: {str(e)}")

@@ -26,6 +26,7 @@ import {
 import { format, isToday, isTomorrow, isPast } from 'date-fns';
 
 import type { Task } from '../types';
+import DOMPurify from 'dompurify';
 
 interface TaskCardProps {
   task: Task;
@@ -36,6 +37,19 @@ interface TaskCardProps {
   onView?: (task: Task) => void;
   selected?: boolean;
 }
+
+// Helper function to get plain text from HTML
+const getPlainTextFromHtml = (html: string): string => {
+  if (!html) return '';
+  // If it's already plain text, return as is
+  if (!html.includes('<') && !html.includes('>')) {
+    return html;
+  }
+  // Create a temporary div to parse HTML and extract text
+  const temp = document.createElement('div');
+  temp.innerHTML = DOMPurify.sanitize(html);
+  return temp.textContent || temp.innerText || '';
+};
 
 export default function TaskCard({
   task,
@@ -165,7 +179,7 @@ export default function TaskCard({
                   textDecoration: task.status === 'archived' ? 'line-through' : 'none',
                 }}
               >
-                {task.description}
+                {getPlainTextFromHtml(task.description)}
               </Typography>
             )}
 

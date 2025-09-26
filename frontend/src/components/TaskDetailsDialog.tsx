@@ -27,6 +27,8 @@ import {
   CheckCircle as CheckCircleIcon,
   RadioButtonUnchecked as UncheckedIcon,
   Schedule as ScheduleIcon,
+  PlayArrow as PlayArrowIcon,
+  Pause as PauseIcon,
   Flag as FlagIcon,
   Person as PersonIcon,
   CalendarToday as CalendarIcon,
@@ -40,6 +42,7 @@ import { format, formatDistanceToNow, isToday, isTomorrow, isPast } from 'date-f
 
 import type { Task } from '../types';
 import TaskAttachments from './TaskAttachments';
+import RichTextViewer from './RichTextViewer';
 
 interface TaskDetailsDialogProps {
   open: boolean;
@@ -50,6 +53,8 @@ interface TaskDetailsDialogProps {
   onToggleStatus: () => void;
   onArchive?: () => void;
   onUnarchive?: () => void;
+  onStartTask?: () => void;
+  onPauseTask?: () => void;
 }
 
 interface TabPanelProps {
@@ -82,6 +87,8 @@ export default function TaskDetailsDialog({
   onToggleStatus,
   onArchive,
   onUnarchive,
+  onStartTask,
+  onPauseTask,
 }: TaskDetailsDialogProps) {
   const [tabValue, setTabValue] = useState(0);
 
@@ -185,16 +192,14 @@ export default function TaskDetailsDialog({
           {/* Details Tab */}
           <Stack spacing={3}>
             {/* Description */}
-            {task.description && (
-              <Box>
-                <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                  Description
-                </Typography>
-                <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap' }}>
-                  {task.description}
-                </Typography>
-              </Box>
-            )}
+            <Box>
+              <RichTextViewer
+                content={task.description || ''}
+                label="Description"
+                emptyText="No description provided"
+                maxHeight="300px"
+              />
+            </Box>
 
             {/* Properties Grid */}
             <Grid container spacing={3}>
@@ -403,17 +408,46 @@ export default function TaskDetailsDialog({
       <DialogActions sx={{ p: 2 }}>
         <Stack direction="row" spacing={1} sx={{ flex: 1 }}>
           {/* Left side actions */}
-          <Box>
+          <Box display="flex" gap={1}>
             {canModify && (
-              <Tooltip title={task.status === 'completed' ? 'Mark as incomplete' : 'Mark as complete'}>
-                <Button
-                  startIcon={task.status === 'completed' ? <UncheckedIcon /> : <CheckCircleIcon />}
-                  onClick={onToggleStatus}
-                  color={task.status === 'completed' ? 'inherit' : 'success'}
-                >
-                  {task.status === 'completed' ? 'Uncomplete' : 'Complete'}
-                </Button>
-              </Tooltip>
+              <>
+                {/* Start/Pause button for todo/in_progress tasks */}
+                {task.status === 'todo' && onStartTask && (
+                  <Tooltip title="Start working on this task">
+                    <Button
+                      startIcon={<PlayArrowIcon />}
+                      onClick={onStartTask}
+                      color="primary"
+                      variant="contained"
+                    >
+                      Start Task
+                    </Button>
+                  </Tooltip>
+                )}
+                {task.status === 'in_progress' && onPauseTask && (
+                  <Tooltip title="Pause this task">
+                    <Button
+                      startIcon={<PauseIcon />}
+                      onClick={onPauseTask}
+                      color="inherit"
+                    >
+                      Pause Task
+                    </Button>
+                  </Tooltip>
+                )}
+                {/* Complete/Uncomplete button */}
+                {task.status !== 'archived' && (
+                  <Tooltip title={task.status === 'completed' ? 'Mark as incomplete' : 'Mark as complete'}>
+                    <Button
+                      startIcon={task.status === 'completed' ? <UncheckedIcon /> : <CheckCircleIcon />}
+                      onClick={onToggleStatus}
+                      color={task.status === 'completed' ? 'inherit' : 'success'}
+                    >
+                      {task.status === 'completed' ? 'Uncomplete' : 'Complete'}
+                    </Button>
+                  </Tooltip>
+                )}
+              </>
             )}
           </Box>
 

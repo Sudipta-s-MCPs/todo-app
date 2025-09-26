@@ -67,7 +67,7 @@ services:
       start_period: 30s
 
   mcp-server:
-    build: ./mcp_server
+    build: ./backend/mcp_server
     ports:
       - "5485:5485"
     environment:
